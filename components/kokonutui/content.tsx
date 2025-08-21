@@ -1,7 +1,7 @@
 "use client"
 
-import { useState } from "react"
-import { FileText, Upload, CheckCircle } from "lucide-react"
+import React, { useState, useCallback } from "react"
+import { FileText, Upload, CheckCircle, AlertCircle, FolderOpen, Image } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -15,81 +15,267 @@ import {
 } from "@/components/ui/dialog"
 import { Checkbox } from "@/components/ui/checkbox"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import { Alert, AlertDescription } from "@/components/ui/alert"
+import { Progress } from "@/components/ui/progress"
+import { tauriAPI } from "@/lib/tauri-api"
+import type { ScanResult, ImageReference, LinkReplacement, OSSConfig } from "@/lib/types"
+import { useSystemHealth } from "@/lib/hooks/use-progress-monitoring"
+import { SystemHealthMonitor, SystemHealthIndicator } from "@/components/ui/system-health-monitor"
 
-interface DetectedImage {
-  id: string
-  path: string
-  name: string
-  size: string
-  preview: string
-  status: "local" | "uploaded"
+interface ProcessingState {
+  selectedFiles: string[]
+  scanResults: ScanResult[]
+  selectedImages: Set<string>
+  isScanning: boolean
+  isProcessing: boolean
+  processingProgress: number
+  error: string | null
+  successMessage: string | null
 }
 
 export default function Content() {
-  const [isScanned, setIsScanned] = useState(true) // Set to true for demo
   const [showImageModal, setShowImageModal] = useState(false)
-  const [selectedImages, setSelectedImages] = useState<string[]>([])
+  const [showHealthModal, setShowHealthModal] = useState(false)
+  const [state, setState] = useState<ProcessingState>({
+    selectedFiles: [],
+    scanResults: [],
+    selectedImages: new Set(),
+    isScanning: false,
+    isProcessing: false,
+    processingProgress: 0,
+    error: null,
+    successMessage: null,
+  })
 
-  // Mock detected images data
-  const [detectedImages] = useState<DetectedImage[]>([
-    {
-      id: "1",
-      path: "./images/screenshot1.png",
-      name: "screenshot1.png",
-      size: "245 KB",
-      preview: "/screenshot-of-code.png",
-      status: "local",
-    },
-    {
-      id: "2",
-      path: "./images/diagram.jpg",
-      name: "diagram.jpg",
-      size: "156 KB",
-      preview: "/abstract-profile.png",
-      status: "local",
-    },
-    {
-      id: "3",
-      path: "./images/chart.png",
-      name: "chart.png",
-      size: "89 KB",
-      preview: "/document-stack.png",
-      status: "local",
-    },
-    {
-      id: "4",
-      path: "./images/banner.jpg",
-      name: "banner.jpg",
-      size: "312 KB",
-      preview: "/celebratory-banner.png",
-      status: "local",
-    },
-  ])
+  const [ossConfig, setOssConfig] = useState<OSSConfig | null>(null)
+  const { health, isLoading: healthLoading, refreshHealth } = useSystemHealth()
+
+  // Load OSS config on component mount
+  React.useEffect(() => {
+    const loadConfig = async () => {
+      try {
+        const config = await tauriAPI.loadOSSConfig()
+        setOssConfig(config)
+      } catch (error) {
+        console.error("Failed to load OSS config:", error)
+      }
+    }
+    loadConfig()
+  }, [])
+
+  const clearError = () => setState(prev => ({ ...prev, error: null }))
+  const clearSuccess = () => setState(prev => ({ ...prev, successMessage: null }))
+
+  // Get all detected images from scan results
+  const detectedImages = state.scanResults.flatMap(result => result.images).filter(img => img.exists)
+
+  const handleFileSelection = useCallback(async () => {
+    try {
+      clearError()
+      clearSuccess()
+
+      // Use Tauri's file dialog to select markdown files
+      const { open } = await import('@tauri-apps/plugin-dialog')
+
+      const selected = await open({
+        multiple: true,
+        filters: [{
+          name: 'Markdown Files',
+          extensions: ['md', 'markdown']
+        }]
+      })
+
+      if (selected && Array.isArray(selected)) {
+        setState(prev => ({
+          ...prev,
+          selectedFiles: selected,
+          scanResults: [],
+          selectedImages: new Set()
+        }))
+        // Auto-scan after file selection
+        await handleScanFiles(selected)
+      } else if (selected) {
+        setState(prev => ({
+          ...prev,
+          selectedFiles: [selected],
+          scanResults: [],
+          selectedImages: new Set()
+        }))
+        // Auto-scan after file selection
+        await handleScanFiles([selected])
+      }
+    } catch (error) {
+      setState(prev => ({
+        ...prev,
+        error: `Failed to select files: ${error}`
+      }))
+    }
+  }, [])
+
+  const handleScanFiles = useCallback(async (filesToScan?: string[]) => {
+    const files = filesToScan || state.selectedFiles
+    if (files.length === 0) {
+      setState(prev => ({ ...prev, error: "Please select markdown files first" }))
+      return
+    }
+
+    setState(prev => ({ ...prev, isScanning: true, error: null }))
+
+    try {
+      const results = await tauriAPI.scanMarkdownFiles(files)
+
+      setState(prev => ({
+        ...prev,
+        scanResults: results,
+        isScanning: false,
+        selectedImages: new Set()
+      }))
+    } catch (error) {
+      setState(prev => ({
+        ...prev,
+        error: `Failed to scan files: ${error}`,
+        isScanning: false
+      }))
+    }
+  }, [state.selectedFiles])
 
   const handleImageSelect = (imageId: string, checked: boolean) => {
-    if (checked) {
-      setSelectedImages((prev) => [...prev, imageId])
-    } else {
-      setSelectedImages((prev) => prev.filter((id) => id !== imageId))
-    }
+    setState(prev => {
+      const newSelected = new Set(prev.selectedImages)
+      if (checked) {
+        newSelected.add(imageId)
+      } else {
+        newSelected.delete(imageId)
+      }
+      return { ...prev, selectedImages: newSelected }
+    })
   }
 
   const handleSelectAll = (checked: boolean) => {
-    if (checked) {
-      setSelectedImages(detectedImages.map((img) => img.id))
-    } else {
-      setSelectedImages([])
-    }
+    setState(prev => {
+      const allImageIds = detectedImages.map(img => img.id)
+      return {
+        ...prev,
+        selectedImages: checked ? new Set(allImageIds) : new Set()
+      }
+    })
   }
 
-  const handleUploadSelected = () => {
-    console.log("Uploading selected images:", selectedImages)
-    setShowImageModal(false)
-    // Here you would implement the actual upload logic
-  }
+  const handleUploadSelected = useCallback(async () => {
+    if (state.selectedImages.size === 0) {
+      setState(prev => ({ ...prev, error: "Please select images to process" }))
+      return
+    }
+
+    if (!ossConfig) {
+      setState(prev => ({ ...prev, error: "OSS configuration not found. Please configure storage settings first." }))
+      return
+    }
+
+    setState(prev => ({ ...prev, isProcessing: true, processingProgress: 0, error: null }))
+
+    try {
+      // Step 1: Upload selected images
+      const selectedImageIds = Array.from(state.selectedImages)
+      setState(prev => ({ ...prev, processingProgress: 25 }))
+
+      const uploadResults = await tauriAPI.uploadImages(selectedImageIds, ossConfig)
+      setState(prev => ({ ...prev, processingProgress: 50 }))
+
+      // Step 2: Create link replacements
+      const replacements: LinkReplacement[] = []
+
+      for (const result of state.scanResults) {
+        for (const image of result.images) {
+          if (state.selectedImages.has(image.id)) {
+            const uploadResult = uploadResults.find(ur => ur.image_id === image.id)
+            if (uploadResult?.success && uploadResult.uploaded_url) {
+              replacements.push({
+                file_path: result.file_path,
+                line: image.markdown_line,
+                column: image.markdown_column,
+                old_link: image.original_path,
+                new_link: uploadResult.uploaded_url
+              })
+            }
+          }
+        }
+      }
+
+      setState(prev => ({ ...prev, processingProgress: 75 }))
+
+      // Step 3: Replace links in markdown files
+      if (replacements.length > 0) {
+        await tauriAPI.replaceMarkdownLinksWithResult(replacements)
+      }
+
+      setState(prev => ({
+        ...prev,
+        processingProgress: 100,
+        isProcessing: false,
+        successMessage: `Successfully processed ${replacements.length} images in ${state.scanResults.length} files`
+      }))
+
+      setShowImageModal(false)
+
+      // Add to history
+      await tauriAPI.addHistoryRecord(
+        "replace",
+        state.selectedFiles,
+        replacements.length,
+        true,
+        undefined,
+        undefined,
+        undefined,
+        undefined
+      )
+
+    } catch (error) {
+      setState(prev => ({
+        ...prev,
+        error: `Failed to process images: ${error}`,
+        isProcessing: false,
+        processingProgress: 0
+      }))
+    }
+  }, [state.selectedImages, state.scanResults, state.selectedFiles, ossConfig])
+
+  const totalImages = detectedImages.length
+  const selectedCount = state.selectedImages.size
 
   return (
     <div className="space-y-6">
+      {/* Error Alert */}
+      {state.error && (
+        <Alert variant="destructive">
+          <AlertCircle className="h-4 w-4" />
+          <AlertDescription>{state.error}</AlertDescription>
+          <Button variant="ghost" size="sm" onClick={clearError} className="ml-auto">
+            ×
+          </Button>
+        </Alert>
+      )}
+
+      {/* Success Alert */}
+      {state.successMessage && (
+        <Alert className="border-green-200 bg-green-50 text-green-800 dark:border-green-800 dark:bg-green-900/20 dark:text-green-200">
+          <CheckCircle className="h-4 w-4" />
+          <AlertDescription>{state.successMessage}</AlertDescription>
+          <Button variant="ghost" size="sm" onClick={clearSuccess} className="ml-auto">
+            ×
+          </Button>
+        </Alert>
+      )}
+
+      {/* System Health Indicator */}
+      <div className="flex justify-between items-center">
+        <h1 className="text-2xl font-bold">Dashboard</h1>
+        <SystemHealthIndicator 
+          health={health} 
+          onClick={() => setShowHealthModal(true)}
+        />
+      </div>
+
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2">
           <Card>
@@ -106,14 +292,66 @@ export default function Content() {
                 <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
                   拖拽 Markdown 文件到此处，或点击选择文件
                 </p>
-                <Button onClick={() => setIsScanned(true)}>选择 MD 文件</Button>
+                <Button
+                  onClick={handleFileSelection}
+                  disabled={state.isScanning}
+                >
+                  {state.isScanning ? "扫描中..." : "选择 MD 文件"}
+                </Button>
               </div>
 
-              {isScanned && (
+              {/* Selected Files Display */}
+              {state.selectedFiles.length > 0 && (
+                <div className="space-y-2">
+                  <p className="text-sm text-gray-600 dark:text-gray-400">
+                    已选择 {state.selectedFiles.length} 个文件:
+                  </p>
+                  <div className="max-h-32 overflow-y-auto space-y-1">
+                    {state.selectedFiles.map((file, index) => (
+                      <div key={index} className="text-sm font-mono bg-gray-100 dark:bg-gray-800 p-2 rounded">
+                        {file}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Scanning Progress */}
+              {state.isScanning && (
+                <div className="space-y-2">
+                  <p className="text-sm text-gray-600 dark:text-gray-400">正在扫描文件中的图片...</p>
+                  <Progress value={50} className="w-full" />
+                </div>
+              )}
+
+              {/* Processing Progress */}
+              {state.isProcessing && (
+                <div className="space-y-2">
+                  <p className="text-sm text-gray-600 dark:text-gray-400">正在处理图片...</p>
+                  <Progress value={state.processingProgress} className="w-full" />
+                </div>
+              )}
+
+              {/* OSS Configuration Status */}
+              {!ossConfig && detectedImages.length > 0 && (
+                <Alert>
+                  <AlertCircle className="h-4 w-4" />
+                  <AlertDescription>
+                    未找到 OSS 配置。请先在存储配置页面配置您的对象存储设置。
+                  </AlertDescription>
+                </Alert>
+              )}
+
+              {/* Detected Images */}
+              {detectedImages.length > 0 && (
                 <div className="space-y-4">
                   <div className="flex items-center justify-between">
                     <h4 className="font-medium">检测到的图片 ({detectedImages.length})</h4>
-                    <Button onClick={() => setShowImageModal(true)} className="bg-blue-600 hover:bg-blue-700">
+                    <Button
+                      onClick={() => setShowImageModal(true)}
+                      className="bg-blue-600 hover:bg-blue-700"
+                      disabled={state.isProcessing || !ossConfig}
+                    >
                       选择上传
                     </Button>
                   </div>
@@ -125,7 +363,7 @@ export default function Content() {
                       >
                         <div className="flex items-center gap-3">
                           <CheckCircle className="h-4 w-4 text-green-500" />
-                          <span className="text-sm">{image.path}</span>
+                          <span className="text-sm">{image.original_path}</span>
                         </div>
                         <Badge variant="secondary">本地</Badge>
                       </div>
@@ -137,6 +375,34 @@ export default function Content() {
                         </Button>
                       </div>
                     )}
+                  </div>
+                </div>
+              )}
+
+              {/* Scan Results Summary */}
+              {state.scanResults.length > 0 && (
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-4">
+                  <div className="text-center p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
+                    <FileText className="h-6 w-6 mx-auto text-blue-500 mb-1" />
+                    <p className="text-sm text-gray-600 dark:text-gray-400">文件</p>
+                    <p className="text-lg font-bold text-blue-600">{state.scanResults.length}</p>
+                  </div>
+                  <div className="text-center p-3 bg-green-50 dark:bg-green-900/20 rounded-lg">
+                    <Image className="h-6 w-6 mx-auto text-green-500 mb-1" />
+                    <p className="text-sm text-gray-600 dark:text-gray-400">图片</p>
+                    <p className="text-lg font-bold text-green-600">{detectedImages.length}</p>
+                  </div>
+                  <div className="text-center p-3 bg-purple-50 dark:bg-purple-900/20 rounded-lg">
+                    <CheckCircle className="h-6 w-6 mx-auto text-purple-500 mb-1" />
+                    <p className="text-sm text-gray-600 dark:text-gray-400">已选择</p>
+                    <p className="text-lg font-bold text-purple-600">{selectedCount}</p>
+                  </div>
+                  <div className="text-center p-3 bg-orange-50 dark:bg-orange-900/20 rounded-lg">
+                    <AlertCircle className="h-6 w-6 mx-auto text-orange-500 mb-1" />
+                    <p className="text-sm text-gray-600 dark:text-gray-400">缺失</p>
+                    <p className="text-lg font-bold text-orange-600">
+                      {state.scanResults.flatMap(r => r.images).length - detectedImages.length}
+                    </p>
                   </div>
                 </div>
               )}
@@ -252,11 +518,11 @@ export default function Content() {
             <div className="flex items-center gap-2">
               <Checkbox
                 id="select-all"
-                checked={selectedImages.length === detectedImages.length}
+                checked={selectedCount === detectedImages.length && detectedImages.length > 0}
                 onCheckedChange={handleSelectAll}
               />
               <label htmlFor="select-all" className="text-sm font-medium">
-                全选 ({selectedImages.length}/{detectedImages.length})
+                全选 ({selectedCount}/{detectedImages.length})
               </label>
             </div>
 
@@ -267,21 +533,30 @@ export default function Content() {
                     <div className="flex items-start gap-3">
                       <Checkbox
                         id={`image-${image.id}`}
-                        checked={selectedImages.includes(image.id)}
+                        checked={state.selectedImages.has(image.id)}
                         onCheckedChange={(checked) => handleImageSelect(image.id, checked as boolean)}
                       />
                       <div className="flex-1 min-w-0">
-                        <img
-                          src={image.preview || "/placeholder.svg"}
-                          alt={image.name}
-                          className="w-full h-32 object-cover rounded-md mb-2"
-                        />
+                        {image.thumbnail && (
+                          <img
+                            src={image.thumbnail}
+                            alt="Thumbnail"
+                            className="w-full h-32 object-cover rounded-md mb-2"
+                          />
+                        )}
                         <div className="space-y-1">
-                          <p className="font-medium text-sm truncate">{image.name}</p>
-                          <p className="text-xs text-gray-500">{image.path}</p>
+                          <p className="font-medium text-sm truncate">{image.original_path.split('/').pop()}</p>
+                          <p className="text-xs text-gray-500">{image.original_path}</p>
+                          <p className="text-xs text-gray-500">
+                            Line {image.markdown_line}, Col {image.markdown_column}
+                          </p>
                           <div className="flex items-center justify-between">
-                            <span className="text-xs text-gray-500">{image.size}</span>
-                            <Badge variant="secondary">本地</Badge>
+                            <span className="text-xs text-gray-500">
+                              {image.exists ? `${(image.size / 1024).toFixed(1)} KB` : "File not found"}
+                            </span>
+                            <Badge variant={image.exists ? "default" : "destructive"}>
+                              {image.exists ? "可用" : "缺失"}
+                            </Badge>
                           </div>
                         </div>
                       </div>
@@ -298,10 +573,34 @@ export default function Content() {
             </Button>
             <Button
               onClick={handleUploadSelected}
-              disabled={selectedImages.length === 0}
+              disabled={selectedCount === 0 || state.isProcessing || !ossConfig}
               className="bg-blue-600 hover:bg-blue-700"
             >
-              上传选中的图片 ({selectedImages.length})
+              {state.isProcessing ? "处理中..." : `上传选中的图片 (${selectedCount})`}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* System Health Modal */}
+      <Dialog open={showHealthModal} onOpenChange={setShowHealthModal}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>System Health Monitor</DialogTitle>
+            <DialogDescription>
+              Monitor system performance and health status
+            </DialogDescription>
+          </DialogHeader>
+          
+          <SystemHealthMonitor
+            health={health}
+            isLoading={healthLoading}
+            onRefresh={refreshHealth}
+          />
+          
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowHealthModal(false)}>
+              Close
             </Button>
           </DialogFooter>
         </DialogContent>

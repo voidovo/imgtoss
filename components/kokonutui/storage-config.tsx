@@ -1,189 +1,233 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Badge } from "@/components/ui/badge"
 import { Switch } from "@/components/ui/switch"
-import { AlertCircle, CheckCircle, Cloud, Database, Globe, Key, Plus, Settings, Trash2, TestTube } from "lucide-react"
+import { AlertCircle, CheckCircle, Cloud, Database, Globe, Key, Plus, Settings, Trash2, TestTube, Download, Upload, Loader2 } from "lucide-react"
 import { Alert, AlertDescription } from "@/components/ui/alert"
+import { configOperations } from "@/lib/tauri-api"
+import { OSSConfig, OSSProvider, OSSConnectionTest, ConfigValidation } from "@/lib/types"
+import { parseTauriError } from "@/lib/error-handler"
 
-interface StorageProvider {
-  id: string
-  name: string
-  type: "aws-s3" | "aliyun-oss" | "tencent-cos" | "qiniu-kodo" | "upyun" | "custom"
-  config: {
-    accessKey: string
-    secretKey: string
-    bucket: string
-    region: string
-    endpoint?: string
-    customDomain?: string
-  }
-  isDefault: boolean
-  isActive: boolean
-  lastTested?: Date
-  status: "connected" | "error" | "untested"
+interface StorageConfigState {
+  config: OSSConfig | null
+  isLoading: boolean
+  isTesting: boolean
+  isValidating: boolean
+  lastConnectionTest: OSSConnectionTest | null
+  validationResult: ConfigValidation | null
+  error: string | null
 }
 
 const providerTemplates = {
-  "aws-s3": {
+  [OSSProvider.AWS]: {
     name: "Amazon S3",
     icon: Cloud,
     regions: ["us-east-1", "us-west-2", "eu-west-1", "ap-southeast-1"],
-    fields: ["accessKey", "secretKey", "bucket", "region"],
+    defaultEndpoint: "https://s3.amazonaws.com",
   },
-  "aliyun-oss": {
+  [OSSProvider.Aliyun]: {
     name: "阿里云 OSS",
     icon: Database,
     regions: ["oss-cn-hangzhou", "oss-cn-shanghai", "oss-cn-beijing", "oss-cn-shenzhen"],
-    fields: ["accessKey", "secretKey", "bucket", "region", "endpoint"],
+    defaultEndpoint: "https://oss-cn-hangzhou.aliyuncs.com",
   },
-  "tencent-cos": {
+  [OSSProvider.Tencent]: {
     name: "腾讯云 COS",
     icon: Globe,
     regions: ["ap-beijing", "ap-shanghai", "ap-guangzhou", "ap-chengdu"],
-    fields: ["accessKey", "secretKey", "bucket", "region"],
+    defaultEndpoint: "https://cos.ap-beijing.myqcloud.com",
   },
-  "qiniu-kodo": {
-    name: "七牛云 Kodo",
-    icon: Key,
-    regions: ["华东", "华北", "华南", "北美"],
-    fields: ["accessKey", "secretKey", "bucket", "region", "customDomain"],
-  },
-  upyun: {
-    name: "又拍云",
-    icon: Settings,
-    regions: ["自动选择", "电信", "联通", "移动"],
-    fields: ["accessKey", "secretKey", "bucket", "region"],
-  },
-  custom: {
+  [OSSProvider.Custom]: {
     name: "自定义 S3",
     icon: Cloud,
     regions: [],
-    fields: ["accessKey", "secretKey", "bucket", "endpoint", "customDomain"],
+    defaultEndpoint: "",
   },
 }
 
 export function StorageConfig() {
-  const [providers, setProviders] = useState<StorageProvider[]>([
-    {
-      id: "1",
-      name: "AWS S3 Production",
-      type: "aws-s3",
-      config: {
-        accessKey: "AKIA***************",
-        secretKey: "***************",
-        bucket: "my-images-bucket",
-        region: "us-east-1",
-      },
-      isDefault: true,
-      isActive: true,
-      lastTested: new Date(),
-      status: "connected",
-    },
-    {
-      id: "2",
-      name: "阿里云 OSS 备用",
-      type: "aliyun-oss",
-      config: {
-        accessKey: "LTAI***************",
-        secretKey: "***************",
-        bucket: "backup-images",
-        region: "oss-cn-hangzhou",
-        endpoint: "oss-cn-hangzhou.aliyuncs.com",
-      },
-      isDefault: false,
-      isActive: true,
-      status: "untested",
-    },
-  ])
-
-  const [selectedProvider, setSelectedProvider] = useState<string>("")
-  const [isAddingNew, setIsAddingNew] = useState(false)
-  const [newProvider, setNewProvider] = useState<Partial<StorageProvider>>({
-    type: "aws-s3",
-    config: {
-      accessKey: "",
-      secretKey: "",
-      bucket: "",
-      region: "",
-    },
-    isDefault: false,
-    isActive: true,
-    status: "untested",
+  const [state, setState] = useState<StorageConfigState>({
+    config: null,
+    isLoading: true,
+    isTesting: false,
+    isValidating: false,
+    lastConnectionTest: null,
+    validationResult: null,
+    error: null,
   })
 
-  const handleAddProvider = () => {
-    if (
-      newProvider.name &&
-      newProvider.config?.accessKey &&
-      newProvider.config?.secretKey &&
-      newProvider.config?.bucket
-    ) {
-      const provider: StorageProvider = {
-        id: Date.now().toString(),
-        name: newProvider.name,
-        type: newProvider.type!,
-        config: newProvider.config as StorageProvider["config"],
-        isDefault: providers.length === 0,
-        isActive: true,
-        status: "untested",
+  const [isEditing, setIsEditing] = useState(false)
+  const [editConfig, setEditConfig] = useState<OSSConfig>({
+    provider: OSSProvider.Aliyun,
+    endpoint: "",
+    access_key_id: "",
+    access_key_secret: "",
+    bucket: "",
+    region: "",
+    path_template: "images/{date}/{filename}",
+    cdn_domain: undefined,
+    compression_enabled: true,
+    compression_quality: 80,
+  })
+
+  // Load configuration on component mount
+  useEffect(() => {
+    loadConfiguration()
+  }, [])
+
+  const loadConfiguration = async () => {
+    try {
+      setState(prev => ({ ...prev, isLoading: true, error: null }))
+      const config = await configOperations.loadOSSConfig()
+      setState(prev => ({
+        ...prev,
+        config,
+        isLoading: false,
+      }))
+      if (config) {
+        setEditConfig(config)
       }
-      setProviders([...providers, provider])
-      setNewProvider({
-        type: "aws-s3",
-        config: { accessKey: "", secretKey: "", bucket: "", region: "" },
-        isDefault: false,
-        isActive: true,
-        status: "untested",
-      })
-      setIsAddingNew(false)
+    } catch (error) {
+      const errorMessage = parseTauriError(error).message
+      setState(prev => ({
+        ...prev,
+        error: errorMessage,
+        isLoading: false
+      }))
     }
   }
 
-  const handleTestConnection = async (providerId: string) => {
-    setProviders((prev) =>
-      prev.map((p) => (p.id === providerId ? { ...p, status: "connected", lastTested: new Date() } : p)),
+  const handleSaveConfig = async () => {
+    try {
+      setState(prev => ({ ...prev, isValidating: true, error: null }))
+
+      // Validate configuration first
+      const validation = await configOperations.validateOSSConfig(editConfig)
+      setState(prev => ({ ...prev, validationResult: validation }))
+
+      if (!validation.valid) {
+        setState(prev => ({
+          ...prev,
+          error: `Configuration validation failed: ${validation.errors.join(', ')}`,
+          isValidating: false
+        }))
+        return
+      }
+
+      // Save configuration
+      await configOperations.saveOSSConfig(editConfig)
+      setState(prev => ({
+        ...prev,
+        config: editConfig,
+        isValidating: false,
+        lastConnectionTest: validation.connection_test || null
+      }))
+      setIsEditing(false)
+    } catch (error) {
+      const errorMessage = parseTauriError(error).message
+      setState(prev => ({
+        ...prev,
+        error: errorMessage,
+        isValidating: false
+      }))
+    }
+  }
+
+  const handleTestConnection = async () => {
+    try {
+      setState(prev => ({ ...prev, isTesting: true, error: null }))
+      const connectionTest = await configOperations.testOSSConnection(editConfig)
+      setState(prev => ({
+        ...prev,
+        lastConnectionTest: connectionTest,
+        isTesting: false
+      }))
+    } catch (error) {
+      const errorMessage = parseTauriError(error).message
+      setState(prev => ({
+        ...prev,
+        error: errorMessage,
+        isTesting: false
+      }))
+    }
+  }
+
+  const handleExportConfig = async () => {
+    try {
+      const configJson = await configOperations.exportOSSConfig()
+
+      // Create and download file
+      const blob = new Blob([configJson], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `imgtoss-config-${new Date().toISOString().split('T')[0]}.json`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+    } catch (error) {
+      const errorMessage = parseTauriError(error).message
+      setState(prev => ({ ...prev, error: errorMessage }))
+    }
+  }
+
+  const handleImportConfig = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    if (!file) return
+
+    try {
+      const configJson = await file.text()
+      await configOperations.importOSSConfig(configJson)
+      await loadConfiguration() // Reload the configuration
+    } catch (error) {
+      const errorMessage = parseTauriError(error).message
+      setState(prev => ({ ...prev, error: errorMessage }))
+    }
+
+    // Reset file input
+    event.target.value = ''
+  }
+
+  const handleProviderChange = (provider: OSSProvider) => {
+    const template = providerTemplates[provider]
+    setEditConfig(prev => ({
+      ...prev,
+      provider,
+      endpoint: template.defaultEndpoint,
+      region: template.regions[0] || "",
+    }))
+  }
+
+  const getStatusColor = (success?: boolean) => {
+    if (success === undefined) return "text-gray-500"
+    return success ? "text-green-600" : "text-red-600"
+  }
+
+  const getStatusIcon = (success?: boolean) => {
+    if (success === undefined) return TestTube
+    return success ? CheckCircle : AlertCircle
+  }
+
+  const getStatusText = (success?: boolean) => {
+    if (success === undefined) return "未测试"
+    return success ? "连接成功" : "连接失败"
+  }
+
+  if (state.isLoading) {
+    return (
+      <div className="flex items-center justify-center min-h-[400px]">
+        <div className="flex items-center gap-2">
+          <Loader2 className="h-6 w-6 animate-spin" />
+          <span>加载配置中...</span>
+        </div>
+      </div>
     )
-  }
-
-  const handleSetDefault = (providerId: string) => {
-    setProviders((prev) =>
-      prev.map((p) => ({
-        ...p,
-        isDefault: p.id === providerId,
-      })),
-    )
-  }
-
-  const handleDeleteProvider = (providerId: string) => {
-    setProviders((prev) => prev.filter((p) => p.id !== providerId))
-  }
-
-  const getStatusColor = (status: StorageProvider["status"]) => {
-    switch (status) {
-      case "connected":
-        return "text-green-600"
-      case "error":
-        return "text-red-600"
-      default:
-        return "text-gray-500"
-    }
-  }
-
-  const getStatusIcon = (status: StorageProvider["status"]) => {
-    switch (status) {
-      case "connected":
-        return CheckCircle
-      case "error":
-        return AlertCircle
-      default:
-        return TestTube
-    }
   }
 
   return (
@@ -194,137 +238,171 @@ export function StorageConfig() {
           <h1 className="text-3xl font-bold">存储配置</h1>
           <p className="text-muted-foreground mt-2">配置和管理对象存储服务提供商</p>
         </div>
-        <Button onClick={() => setIsAddingNew(true)} className="flex items-center gap-2">
-          <Plus className="h-4 w-4" />
-          添加存储
-        </Button>
+        <div className="flex items-center gap-2">
+          <input
+            type="file"
+            accept=".json"
+            onChange={handleImportConfig}
+            className="hidden"
+            id="import-config"
+          />
+          <Button
+            variant="outline"
+            onClick={() => document.getElementById('import-config')?.click()}
+            className="flex items-center gap-2"
+          >
+            <Upload className="h-4 w-4" />
+            导入配置
+          </Button>
+          {state.config && (
+            <Button
+              variant="outline"
+              onClick={handleExportConfig}
+              className="flex items-center gap-2"
+            >
+              <Download className="h-4 w-4" />
+              导出配置
+            </Button>
+          )}
+          <Button
+            onClick={() => setIsEditing(true)}
+            className="flex items-center gap-2"
+          >
+            <Plus className="h-4 w-4" />
+            {state.config ? "编辑配置" : "添加配置"}
+          </Button>
+        </div>
       </div>
 
-      {/* Storage Providers List */}
-      <div className="grid gap-4">
-        {providers.map((provider) => {
-          const template = providerTemplates[provider.type]
-          const StatusIcon = getStatusIcon(provider.status)
+      {/* Error Display */}
+      {state.error && (
+        <Alert variant="destructive">
+          <AlertCircle className="h-4 w-4" />
+          <AlertDescription>{state.error}</AlertDescription>
+        </Alert>
+      )}
 
-          return (
-            <Card key={provider.id} className="relative">
-              <CardHeader className="pb-3">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <template.icon className="h-5 w-5 text-muted-foreground" />
-                    <div>
-                      <CardTitle className="text-lg">{provider.name}</CardTitle>
-                      <CardDescription>{template.name}</CardDescription>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {provider.isDefault && <Badge variant="default">默认</Badge>}
-                    <div className={`flex items-center gap-1 ${getStatusColor(provider.status)}`}>
-                      <StatusIcon className="h-4 w-4" />
-                      <span className="text-sm">
-                        {provider.status === "connected"
-                          ? "已连接"
-                          : provider.status === "error"
-                            ? "连接失败"
-                            : "未测试"}
-                      </span>
-                    </div>
-                  </div>
+      {/* Current Configuration Display */}
+      {state.config && !isEditing && (
+        <Card>
+          <CardHeader className="pb-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                {(() => {
+                  const template = providerTemplates[state.config.provider]
+                  const StatusIcon = getStatusIcon(state.lastConnectionTest?.success)
+                  return (
+                    <>
+                      <template.icon className="h-5 w-5 text-muted-foreground" />
+                      <div>
+                        <CardTitle className="text-lg">当前存储配置</CardTitle>
+                        <CardDescription>{template.name}</CardDescription>
+                      </div>
+                    </>
+                  )
+                })()}
+              </div>
+              <div className="flex items-center gap-2">
+                <div className={`flex items-center gap-1 ${getStatusColor(state.lastConnectionTest?.success)}`}>
+                  {(() => {
+                    const StatusIcon = getStatusIcon(state.lastConnectionTest?.success)
+                    return <StatusIcon className="h-4 w-4" />
+                  })()}
+                  <span className="text-sm">
+                    {getStatusText(state.lastConnectionTest?.success)}
+                  </span>
                 </div>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-                  <div>
-                    <Label className="text-xs text-muted-foreground">存储桶</Label>
-                    <p className="font-mono">{provider.config.bucket}</p>
-                  </div>
-                  <div>
-                    <Label className="text-xs text-muted-foreground">区域</Label>
-                    <p>{provider.config.region}</p>
-                  </div>
-                  <div>
-                    <Label className="text-xs text-muted-foreground">访问密钥</Label>
-                    <p className="font-mono">{provider.config.accessKey}</p>
-                  </div>
-                  <div>
-                    <Label className="text-xs text-muted-foreground">最后测试</Label>
-                    <p>{provider.lastTested ? provider.lastTested.toLocaleDateString() : "从未"}</p>
-                  </div>
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+              <div>
+                <Label className="text-xs text-muted-foreground">存储桶</Label>
+                <p className="font-mono">{state.config.bucket}</p>
+              </div>
+              <div>
+                <Label className="text-xs text-muted-foreground">区域</Label>
+                <p>{state.config.region}</p>
+              </div>
+              <div>
+                <Label className="text-xs text-muted-foreground">访问密钥</Label>
+                <p className="font-mono">{state.config.access_key_id}</p>
+              </div>
+              <div>
+                <Label className="text-xs text-muted-foreground">路径模板</Label>
+                <p className="font-mono">{state.config.path_template}</p>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between pt-2 border-t">
+              <div className="flex items-center gap-4">
+                <div className="flex items-center gap-2">
+                  <Switch
+                    checked={state.config.compression_enabled}
+                    disabled
+                  />
+                  <Label className="text-sm">压缩启用</Label>
                 </div>
+                <span className="text-sm text-muted-foreground">
+                  压缩质量: {state.config.compression_quality}%
+                </span>
+              </div>
 
-                <div className="flex items-center justify-between pt-2 border-t">
-                  <div className="flex items-center gap-4">
-                    <div className="flex items-center gap-2">
-                      <Switch
-                        checked={provider.isActive}
-                        onCheckedChange={(checked) => {
-                          setProviders((prev) =>
-                            prev.map((p) => (p.id === provider.id ? { ...p, isActive: checked } : p)),
-                          )
-                        }}
-                      />
-                      <Label className="text-sm">启用</Label>
-                    </div>
-                  </div>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleTestConnection}
+                  disabled={state.isTesting}
+                >
+                  {state.isTesting ? (
+                    <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                  ) : (
+                    <TestTube className="h-4 w-4 mr-1" />
+                  )}
+                  测试连接
+                </Button>
+                <Button variant="outline" size="sm" onClick={() => setIsEditing(true)}>
+                  编辑配置
+                </Button>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
-                  <div className="flex items-center gap-2">
-                    <Button variant="outline" size="sm" onClick={() => handleTestConnection(provider.id)}>
-                      <TestTube className="h-4 w-4 mr-1" />
-                      测试连接
-                    </Button>
-                    {!provider.isDefault && (
-                      <Button variant="outline" size="sm" onClick={() => handleSetDefault(provider.id)}>
-                        设为默认
-                      </Button>
-                    )}
-                    <Button variant="outline" size="sm" onClick={() => setSelectedProvider(provider.id)}>
-                      编辑
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => handleDeleteProvider(provider.id)}
-                      className="text-red-600 hover:text-red-700"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          )
-        })}
-      </div>
+      {/* No Configuration Message */}
+      {!state.config && !isEditing && (
+        <Card>
+          <CardContent className="flex flex-col items-center justify-center py-12">
+            <Cloud className="h-12 w-12 text-muted-foreground mb-4" />
+            <h3 className="text-lg font-semibold mb-2">尚未配置存储服务</h3>
+            <p className="text-muted-foreground text-center mb-4">
+              请添加一个对象存储配置以开始使用图片上传功能
+            </p>
+            <Button onClick={() => setIsEditing(true)}>
+              <Plus className="h-4 w-4 mr-2" />
+              添加配置
+            </Button>
+          </CardContent>
+        </Card>
+      )}
 
-      {/* Add New Provider Dialog */}
-      {isAddingNew && (
+      {/* Configuration Editor */}
+      {isEditing && (
         <Card>
           <CardHeader>
-            <CardTitle>添加存储提供商</CardTitle>
-            <CardDescription>配置新的对象存储服务</CardDescription>
+            <CardTitle>{state.config ? "编辑存储配置" : "添加存储配置"}</CardTitle>
+            <CardDescription>配置对象存储服务提供商</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label htmlFor="provider-name">配置名称</Label>
-                <Input
-                  id="provider-name"
-                  placeholder="例如：AWS S3 生产环境"
-                  value={newProvider.name || ""}
-                  onChange={(e) => setNewProvider((prev) => ({ ...prev, name: e.target.value }))}
-                />
-              </div>
-              <div className="space-y-2">
                 <Label htmlFor="provider-type">存储类型</Label>
                 <Select
-                  value={newProvider.type}
-                  onValueChange={(value) =>
-                    setNewProvider((prev) => ({
-                      ...prev,
-                      type: value as StorageProvider["type"],
-                      config: { accessKey: "", secretKey: "", bucket: "", region: "" },
-                    }))
-                  }
+                  value={editConfig.provider}
+                  onValueChange={(value) => handleProviderChange(value as OSSProvider)}
                 >
                   <SelectTrigger>
                     <SelectValue />
@@ -341,190 +419,190 @@ export function StorageConfig() {
                   </SelectContent>
                 </Select>
               </div>
-            </div>
-
-            {newProvider.type && (
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label htmlFor="access-key">访问密钥 (Access Key)</Label>
-                  <Input
-                    id="access-key"
-                    placeholder="输入访问密钥"
-                    value={newProvider.config?.accessKey || ""}
-                    onChange={(e) =>
-                      setNewProvider((prev) => ({
-                        ...prev,
-                        config: { ...prev.config!, accessKey: e.target.value },
-                      }))
-                    }
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="secret-key">私有密钥 (Secret Key)</Label>
-                  <Input
-                    id="secret-key"
-                    type="password"
-                    placeholder="输入私有密钥"
-                    value={newProvider.config?.secretKey || ""}
-                    onChange={(e) =>
-                      setNewProvider((prev) => ({
-                        ...prev,
-                        config: { ...prev.config!, secretKey: e.target.value },
-                      }))
-                    }
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="bucket">存储桶名称</Label>
-                  <Input
-                    id="bucket"
-                    placeholder="输入存储桶名称"
-                    value={newProvider.config?.bucket || ""}
-                    onChange={(e) =>
-                      setNewProvider((prev) => ({
-                        ...prev,
-                        config: { ...prev.config!, bucket: e.target.value },
-                      }))
-                    }
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="region">区域</Label>
-                  {providerTemplates[newProvider.type!].regions.length > 0 ? (
-                    <Select
-                      value={newProvider.config?.region || ""}
-                      onValueChange={(value) =>
-                        setNewProvider((prev) => ({
-                          ...prev,
-                          config: { ...prev.config!, region: value },
-                        }))
-                      }
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="选择区域" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {providerTemplates[newProvider.type!].regions.map((region) => (
-                          <SelectItem key={region} value={region}>
-                            {region}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  ) : (
-                    <Input
-                      id="region"
-                      placeholder="输入区域或留空"
-                      value={newProvider.config?.region || ""}
-                      onChange={(e) =>
-                        setNewProvider((prev) => ({
-                          ...prev,
-                          config: { ...prev.config!, region: e.target.value },
-                        }))
-                      }
-                    />
-                  )}
-                </div>
-              </div>
-            )}
-
-            {/* Advanced Options */}
-            {newProvider.type && ["aliyun-oss", "custom"].includes(newProvider.type) && (
               <div className="space-y-2">
-                <Label htmlFor="endpoint">自定义端点 (可选)</Label>
+                <Label htmlFor="endpoint">端点地址</Label>
                 <Input
                   id="endpoint"
-                  placeholder="例如：oss-cn-hangzhou.aliyuncs.com"
-                  value={newProvider.config?.endpoint || ""}
-                  onChange={(e) =>
-                    setNewProvider((prev) => ({
-                      ...prev,
-                      config: { ...prev.config!, endpoint: e.target.value },
-                    }))
-                  }
+                  placeholder="例如：https://oss-cn-hangzhou.aliyuncs.com"
+                  value={editConfig.endpoint}
+                  onChange={(e) => setEditConfig(prev => ({ ...prev, endpoint: e.target.value }))}
                 />
               </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="access-key">访问密钥 (Access Key)</Label>
+                <Input
+                  id="access-key"
+                  placeholder="输入访问密钥"
+                  value={editConfig.access_key_id}
+                  onChange={(e) => setEditConfig(prev => ({ ...prev, access_key_id: e.target.value }))}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="secret-key">私有密钥 (Secret Key)</Label>
+                <Input
+                  id="secret-key"
+                  type="password"
+                  placeholder="输入私有密钥"
+                  value={editConfig.access_key_secret}
+                  onChange={(e) => setEditConfig(prev => ({ ...prev, access_key_secret: e.target.value }))}
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="bucket">存储桶名称</Label>
+                <Input
+                  id="bucket"
+                  placeholder="输入存储桶名称"
+                  value={editConfig.bucket}
+                  onChange={(e) => setEditConfig(prev => ({ ...prev, bucket: e.target.value }))}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="region">区域</Label>
+                {providerTemplates[editConfig.provider].regions.length > 0 ? (
+                  <Select
+                    value={editConfig.region}
+                    onValueChange={(value) => setEditConfig(prev => ({ ...prev, region: value }))}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="选择区域" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {providerTemplates[editConfig.provider].regions.map((region) => (
+                        <SelectItem key={region} value={region}>
+                          {region}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                ) : (
+                  <Input
+                    id="region"
+                    placeholder="输入区域"
+                    value={editConfig.region}
+                    onChange={(e) => setEditConfig(prev => ({ ...prev, region: e.target.value }))}
+                  />
+                )}
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="path-template">路径模板</Label>
+              <Input
+                id="path-template"
+                placeholder="例如：images/{date}/{filename}"
+                value={editConfig.path_template}
+                onChange={(e) => setEditConfig(prev => ({ ...prev, path_template: e.target.value }))}
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="cdn-domain">CDN 域名 (可选)</Label>
+              <Input
+                id="cdn-domain"
+                placeholder="例如：https://cdn.example.com"
+                value={editConfig.cdn_domain || ""}
+                onChange={(e) => setEditConfig(prev => ({ ...prev, cdn_domain: e.target.value || undefined }))}
+              />
+            </div>
+
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <Label>启用图片压缩</Label>
+                  <p className="text-sm text-muted-foreground">上传前自动压缩图片以节省存储空间</p>
+                </div>
+                <Switch
+                  checked={editConfig.compression_enabled}
+                  onCheckedChange={(checked) => setEditConfig(prev => ({ ...prev, compression_enabled: checked }))}
+                />
+              </div>
+
+              {editConfig.compression_enabled && (
+                <div className="space-y-2">
+                  <Label htmlFor="compression-quality">压缩质量 ({editConfig.compression_quality}%)</Label>
+                  <Input
+                    id="compression-quality"
+                    type="range"
+                    min="10"
+                    max="100"
+                    step="10"
+                    value={editConfig.compression_quality}
+                    onChange={(e) => setEditConfig(prev => ({ ...prev, compression_quality: parseInt(e.target.value) }))}
+                  />
+                </div>
+              )}
+            </div>
+
+            {/* Validation Results */}
+            {state.validationResult && !state.validationResult.valid && (
+              <Alert variant="destructive">
+                <AlertCircle className="h-4 w-4" />
+                <AlertDescription>
+                  配置验证失败：{state.validationResult.errors.join(', ')}
+                </AlertDescription>
+              </Alert>
             )}
 
-            {newProvider.type === "qiniu-kodo" && (
-              <div className="space-y-2">
-                <Label htmlFor="custom-domain">自定义域名 (可选)</Label>
-                <Input
-                  id="custom-domain"
-                  placeholder="例如：img.example.com"
-                  value={newProvider.config?.customDomain || ""}
-                  onChange={(e) =>
-                    setNewProvider((prev) => ({
-                      ...prev,
-                      config: { ...prev.config!, customDomain: e.target.value },
-                    }))
+            {/* Connection Test Results */}
+            {state.lastConnectionTest && (
+              <Alert variant={state.lastConnectionTest.success ? "default" : "destructive"}>
+                {state.lastConnectionTest.success ? (
+                  <CheckCircle className="h-4 w-4" />
+                ) : (
+                  <AlertCircle className="h-4 w-4" />
+                )}
+                <AlertDescription>
+                  {state.lastConnectionTest.success
+                    ? `连接测试成功 (延迟: ${state.lastConnectionTest.latency}ms)`
+                    : `连接测试失败: ${state.lastConnectionTest.error}`
                   }
-                />
-              </div>
+                </AlertDescription>
+              </Alert>
             )}
 
             <Alert>
               <AlertCircle className="h-4 w-4" />
               <AlertDescription>
-                请确保提供的访问密钥具有对应存储桶的读写权限。配置保存后建议立即测试连接。
+                请确保提供的访问密钥具有对应存储桶的读写权限。配置保存前会自动进行连接测试。
               </AlertDescription>
             </Alert>
 
             <div className="flex justify-end gap-2 pt-4">
-              <Button variant="outline" onClick={() => setIsAddingNew(false)}>
+              <Button variant="outline" onClick={() => setIsEditing(false)}>
                 取消
               </Button>
-              <Button onClick={handleAddProvider}>添加配置</Button>
+              <Button
+                variant="outline"
+                onClick={handleTestConnection}
+                disabled={state.isTesting}
+              >
+                {state.isTesting ? (
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                ) : (
+                  <TestTube className="h-4 w-4 mr-2" />
+                )}
+                测试连接
+              </Button>
+              <Button
+                onClick={handleSaveConfig}
+                disabled={state.isValidating}
+              >
+                {state.isValidating ? (
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                ) : null}
+                保存配置
+              </Button>
             </div>
           </CardContent>
         </Card>
       )}
 
-      {/* Global Settings */}
-      <Card>
-        <CardHeader>
-          <CardTitle>全局设置</CardTitle>
-          <CardDescription>配置上传行为和默认选项</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <Label htmlFor="upload-timeout">上传超时 (秒)</Label>
-              <Input id="upload-timeout" type="number" defaultValue="300" />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="retry-count">重试次数</Label>
-              <Input id="retry-count" type="number" defaultValue="3" />
-            </div>
-          </div>
-
-          <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <div>
-                <Label>自动重命名重复文件</Label>
-                <p className="text-sm text-muted-foreground">当文件名冲突时自动添加时间戳</p>
-              </div>
-              <Switch defaultChecked />
-            </div>
-
-            <div className="flex items-center justify-between">
-              <div>
-                <Label>上传后自动复制链接</Label>
-                <p className="text-sm text-muted-foreground">上传完成后自动复制图片链接到剪贴板</p>
-              </div>
-              <Switch defaultChecked />
-            </div>
-
-            <div className="flex items-center justify-between">
-              <div>
-                <Label>启用上传进度通知</Label>
-                <p className="text-sm text-muted-foreground">显示系统通知提醒上传状态</p>
-              </div>
-              <Switch />
-            </div>
-          </div>
-        </CardContent>
-      </Card>
     </div>
   )
 }

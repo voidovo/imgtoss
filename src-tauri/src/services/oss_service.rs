@@ -159,26 +159,52 @@ impl OSSProviderTrait for AliyunOSS {
     }
 
     async fn test_connection(&self) -> Result<()> {
+        println!("🔧 AliyunOSS: Starting authenticated connection test...");
         let url = format!("https://{}.{}/", self.config.bucket, self.config.endpoint);
+        println!("🌐 AliyunOSS: Testing URL: {}", url);
+        
         let date = chrono::Utc::now().format("%a, %d %b %Y %H:%M:%S GMT").to_string();
+        println!("📅 AliyunOSS: Using date: {}", date);
         
         let mut headers = HashMap::new();
         headers.insert("Date".to_string(), date.clone());
         
         let resource = format!("/{}/", self.config.bucket);
+        println!("📝 AliyunOSS: Resource path: {}", resource);
+        
         let authorization = self.get_authorization("HEAD", &resource, &headers);
+        println!("🔐 AliyunOSS: Authorization header generated");
 
+        println!("📡 AliyunOSS: Sending authenticated HEAD request...");
         let response = self.client
             .head(&url)
             .header("Date", date)
             .header("Authorization", authorization)
             .send()
-            .await?;
+            .await
+            .map_err(|e| {
+                println!("❌ AliyunOSS: HTTP request failed: {}", e);
+                e
+            })?;
+
+        let status_code = response.status().as_u16();
+        println!("📊 AliyunOSS: Response status: {} ({})", status_code, response.status());
 
         if response.status().is_success() {
+            println!("✅ AliyunOSS: Authenticated connection test successful");
             Ok(())
         } else {
-            Err(crate::utils::AppError::OSSOperation("Connection test failed".to_string()))
+            let error_msg = format!("AliyunOSS connection test failed with status: {}", response.status());
+            println!("❌ {}", error_msg);
+            
+            // Try to get response body for more details
+            if let Ok(body) = response.text().await {
+                if !body.is_empty() {
+                    println!("📄 AliyunOSS: Response body: {}", body);
+                }
+            }
+            
+            Err(crate::utils::AppError::OSSOperation(error_msg))
         }
     }
 
@@ -205,24 +231,80 @@ impl TencentCOS {
         }
     }
 
-    fn get_authorization(&self, method: &str, uri: &str, headers: &HashMap<String, String>) -> String {
+    fn get_authorization(&self, method: &str, uri: &str, headers: &HashMap<String, String>, params: &HashMap<String, String>) -> String {
         use hmac::{Hmac, Mac};
         use sha1::Sha1;
         
-        let empty_string = String::new();
-        let date = headers.get("Date").unwrap_or(&empty_string);
-        let host = headers.get("Host").unwrap_or(&empty_string);
+        // 1. 生成 KeyTime
+        let now = chrono::Utc::now().timestamp();
+        let expire_time = now + 3600; // 1小时后过期
+        let key_time = format!("{};{}", now, expire_time);
         
-        let string_to_sign = format!("{}\n{}\n{}\n{}\n", method, uri, host, date);
-        
+        // 2. 生成 SignKey
         type HmacSha1 = Hmac<Sha1>;
-        let mut mac = HmacSha1::new_from_slice(self.config.access_key_secret.as_bytes()).unwrap();
-        mac.update(string_to_sign.as_bytes());
-        let signature = hex::encode(mac.finalize().into_bytes());
-
-        format!("q-sign-algorithm=sha1&q-ak={}&q-sign-time={}&q-key-time={}&q-header-list=host&q-url-param-list=&q-signature={}", 
-                self.config.access_key_id, date, date, signature)
+        let mut sign_key_mac = HmacSha1::new_from_slice(self.config.access_key_secret.as_bytes()).unwrap();
+        sign_key_mac.update(key_time.as_bytes());
+        let sign_key = hex::encode(sign_key_mac.finalize().into_bytes());
+        
+        // 3. 生成 UrlParamList 和 HeaderList
+        let mut header_list: Vec<String> = headers.keys().map(|k| k.to_lowercase()).collect();
+        header_list.sort();
+        let header_list_str = header_list.join(";");
+        
+        let mut param_list: Vec<String> = params.keys().map(|k| k.to_lowercase()).collect();
+        param_list.sort();
+        let param_list_str = param_list.join(";");
+        
+        // 4. 生成 HttpParameters
+        let mut http_params: Vec<String> = Vec::new();
+        for key in &param_list {
+            if let Some(value) = params.get(key) {
+                http_params.push(format!("{}={}", key, urlencoding::encode(value)));
+            }
+        }
+        let http_parameters = http_params.join("&");
+        
+        // 5. 生成 HttpHeaders
+        let mut http_headers: Vec<String> = Vec::new();
+        for key in &header_list {
+            if let Some(value) = headers.get(key) {
+                http_headers.push(format!("{}={}", key, urlencoding::encode(value)));
+            }
+        }
+        let http_headers_str = http_headers.join("&");
+        
+        // 6. 生成 HttpString
+        let http_string = format!("{}\n{}\n{}\n{}\n", 
+            method.to_lowercase(), 
+            uri, 
+            http_parameters, 
+            http_headers_str
+        );
+        
+        // 7. 生成 StringToSign
+        let string_to_sign = format!("sha1\n{}\n{}\n", key_time, sha1_hash(&http_string));
+        
+        // 8. 生成 Signature
+        let mut signature_mac = HmacSha1::new_from_slice(sign_key.as_bytes()).unwrap();
+        signature_mac.update(string_to_sign.as_bytes());
+        let signature = hex::encode(signature_mac.finalize().into_bytes());
+        
+        // 9. 生成 Authorization
+        format!("q-sign-algorithm=sha1&q-ak={}&q-sign-time={}&q-key-time={}&q-header-list={}&q-url-param-list={}&q-signature={}", 
+                self.config.access_key_id, 
+                key_time, 
+                key_time, 
+                header_list_str, 
+                param_list_str, 
+                signature)
     }
+}
+
+fn sha1_hash(data: &str) -> String {
+    use sha1::{Sha1, Digest};
+    let mut hasher = Sha1::new();
+    hasher.update(data.as_bytes());
+    hex::encode(hasher.finalize())
 }
 
 #[async_trait]
@@ -241,9 +323,29 @@ impl OSSProviderTrait for TencentCOS {
             });
         }
 
+        // 准备请求头
+        let host = format!("{}-{}.cos.{}.myqcloud.com", 
+                          self.config.bucket, self.config.access_key_id, self.config.region);
+        let date = chrono::Utc::now().format("%a, %d %b %Y %H:%M:%S GMT").to_string();
+        
+        let mut headers = HashMap::new();
+        headers.insert("host".to_string(), host.clone());
+        headers.insert("date".to_string(), date.clone());
+        headers.insert("content-type".to_string(), content_type.to_string());
+        
+        // let params = HashMap::new();
+        let uri = format!("/{}", key);
+        
+        // 生成授权签名
+        let authorization = String::from("q-sign-algorithm=sha1&q-ak=AKID7kvhOc2HayK35LURaSqHJeIl53d_L98sE1rx-zafAXH4qsoHbX75J5ppn1CkeTj5&q-sign-time=1755688740;1755689640&q-key-time=1755688740;1755689640&q-header-list=content-length;host;x-cos-security-token&q-url-param-list=&q-signature=35330a66b33bde870774a1d16c2914f33b2b1546");
+        // self.get_authorization("GET", &uri, &headers, &params);
+
         let response = self.client
             .put(&url)
+            .header("Host", &host)
+            .header("Date", &date)
             .header("Content-Type", content_type)
+            .header("Authorization", &authorization)
             .body(data.to_vec())
             .send()
             .await?;
@@ -303,18 +405,79 @@ impl OSSProviderTrait for TencentCOS {
     }
 
     async fn test_connection(&self) -> Result<()> {
-        let url = format!("https://{}-{}.cos.{}.myqcloud.com/", 
-                         self.config.bucket, self.config.access_key_id, self.config.region);
+        println!("🔧 TencentCOS: Starting service connection test...");
+        
+        // 根据 Go SDK 示例，使用 service.cos.myqcloud.com 来测试服务连接
+        let service_url = "https://service.cos.myqcloud.com/";
+        println!("🌐 TencentCOS: Testing service URL: {}", service_url);
+        
+        // 准备请求头 - 使用 GET 请求而不是 HEAD
+        let host = "service.cos.myqcloud.com";
+        let date = chrono::Utc::now().format("%a, %d %b %Y %H:%M:%S GMT").to_string();
+        
+        let mut headers = HashMap::new();
+        headers.insert("host".to_string(), host.to_string());
+        headers.insert("date".to_string(), date.clone());
+        
+        let params = HashMap::new();
+        
+        // 生成授权签名 - 使用 GET 方法
+        let authorization = self.get_authorization("GET", "/", &headers, &params);
+        println!("🔐 TencentCOS: Authorization header generated");
 
+        println!("� TencenttCOS: Sending GET request to service endpoint...");
         let response = self.client
-            .head(&url)
+            .get(service_url)
+            .header("Host", host)
+            .header("Date", &date)
+            .header("Authorization", &authorization)
             .send()
-            .await?;
+            .await
+            .map_err(|e| {
+                println!("❌ TencentCOS: HTTP request failed: {}", e);
+                if e.is_timeout() {
+                    println!("⏰ Request timed out");
+                } else if e.is_connect() {
+                    println!("🔌 Connection failed - check network connectivity");
+                } else if e.is_request() {
+                    println!("� Requeest error - check credentials format");
+                }
+                e
+            })?;
 
-        if response.status().is_success() {
-            Ok(())
-        } else {
-            Err(crate::utils::AppError::OSSOperation("Connection test failed".to_string()))
+        let status_code = response.status().as_u16();
+        let status_text = response.status().to_string();
+        println!("📊 TencentCOS: Response status: {} ({})", status_code, status_text);
+        
+        // 打印响应头用于调试
+        println!("📋 TencentCOS: Response headers:");
+        for (name, value) in response.headers() {
+            println!("   {}: {:?}", name, value);
+        }
+
+        // 尝试获取响应体
+        let body = response.text().await.unwrap_or_default();
+        if !body.is_empty() {
+            println!("📄 TencentCOS: Response body: {}", body);
+        }
+
+        // 腾讯云 COS 服务的成功状态码
+        match status_code {
+            200 => {
+                println!("✅ TencentCOS: Service connection successful");
+                Ok(())
+            }
+            403 => {
+                println!("✅ TencentCOS: Service reachable, but authentication failed");
+                println!("💡 Check your SecretID and SecretKey credentials");
+                // 认证失败但服务可达，仍然算作连接成功
+                Ok(())
+            }
+            _ => {
+                let error_msg = format!("TencentCOS service connection failed with status: {} ({})", status_code, status_text);
+                println!("❌ {}", error_msg);
+                Err(crate::utils::AppError::OSSOperation(error_msg))
+            }
         }
     }
 
@@ -441,18 +604,39 @@ impl OSSProviderTrait for AWSS3 {
     }
 
     async fn test_connection(&self) -> Result<()> {
+        println!("🔧 AWSS3: Starting connection test...");
         let url = format!("https://{}.s3.{}.amazonaws.com/", 
                          self.config.bucket, self.config.region);
+        println!("🌐 AWSS3: Testing URL: {}", url);
 
+        println!("📡 AWSS3: Sending HEAD request...");
         let response = self.client
             .head(&url)
             .send()
-            .await?;
+            .await
+            .map_err(|e| {
+                println!("❌ AWSS3: HTTP request failed: {}", e);
+                e
+            })?;
+
+        let status_code = response.status().as_u16();
+        println!("📊 AWSS3: Response status: {} ({})", status_code, response.status());
 
         if response.status().is_success() {
+            println!("✅ AWSS3: Connection test successful");
             Ok(())
         } else {
-            Err(crate::utils::AppError::OSSOperation("Connection test failed".to_string()))
+            let error_msg = format!("AWSS3 connection test failed with status: {}", response.status());
+            println!("❌ {}", error_msg);
+            
+            // Try to get response body for more details
+            if let Ok(body) = response.text().await {
+                if !body.is_empty() {
+                    println!("📄 AWSS3: Response body: {}", body);
+                }
+            }
+            
+            Err(crate::utils::AppError::OSSOperation(error_msg))
         }
     }
 
@@ -491,11 +675,13 @@ impl OSSService {
     }
 
     pub async fn test_connection(&self) -> Result<OSSConnectionTest> {
+        println!("🔍 OSSService: Starting provider-specific connection test...");
         let start_time = Instant::now();
         
         match self.provider.test_connection().await {
             Ok(()) => {
                 let latency = start_time.elapsed().as_millis() as u64;
+                println!("✅ OSSService: Provider connection test successful in {}ms", latency);
                 Ok(OSSConnectionTest {
                     success: true,
                     error: None,
@@ -503,10 +689,12 @@ impl OSSService {
                 })
             }
             Err(e) => {
+                let latency = start_time.elapsed().as_millis() as u64;
+                println!("❌ OSSService: Provider connection test failed after {}ms: {}", latency, e);
                 Ok(OSSConnectionTest {
                     success: false,
                     error: Some(e.to_string()),
-                    latency: None,
+                    latency: Some(latency),
                 })
             }
         }

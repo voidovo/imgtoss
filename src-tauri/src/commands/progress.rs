@@ -2,12 +2,14 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tokio::sync::broadcast;
 use crate::models::UploadProgress;
+use tauri::{AppHandle, Emitter};
 
 /// Progress notification system for async operations
 #[derive(Clone)]
 pub struct ProgressNotifier {
     progress_map: Arc<Mutex<HashMap<String, UploadProgress>>>,
     sender: broadcast::Sender<UploadProgress>,
+    app_handle: Option<AppHandle>,
 }
 
 impl ProgressNotifier {
@@ -16,7 +18,21 @@ impl ProgressNotifier {
         Self {
             progress_map: Arc::new(Mutex::new(HashMap::new())),
             sender,
+            app_handle: None,
         }
+    }
+
+    pub fn with_app_handle(app_handle: AppHandle) -> Self {
+        let (sender, _) = broadcast::channel(1000);
+        Self {
+            progress_map: Arc::new(Mutex::new(HashMap::new())),
+            sender,
+            app_handle: Some(app_handle),
+        }
+    }
+
+    pub fn set_app_handle(&mut self, app_handle: AppHandle) {
+        self.app_handle = Some(app_handle);
     }
 
     /// Update progress for a specific task
@@ -28,8 +44,13 @@ impl ProgressNotifier {
         }
 
         // Broadcast the update
-        if let Err(_) = self.sender.send(progress) {
+        if let Err(_) = self.sender.send(progress.clone()) {
             // No receivers, which is fine
+        }
+
+        // Emit Tauri event for frontend listeners
+        if let Some(app_handle) = &self.app_handle {
+            let _ = app_handle.emit("upload-progress", &progress);
         }
 
         Ok(())
