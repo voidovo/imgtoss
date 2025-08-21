@@ -17,7 +17,10 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Progress } from "@/components/ui/progress"
+import { convertFileSrc } from '@tauri-apps/api/core'
 import { tauriAPI } from "@/lib/tauri-api"
+import { FilenameDisplay } from "@/components/ui/filename-display"
+import { formatFileSizeHuman } from "@/lib/utils/format"
 import type { ScanResult, ImageReference, LinkReplacement, OSSConfig } from "@/lib/types"
 import { useSystemHealth } from "@/lib/hooks/use-progress-monitoring"
 import { SystemHealthMonitor, SystemHealthIndicator } from "@/components/ui/system-health-monitor"
@@ -364,7 +367,14 @@ export default function Content() {
                       >
                         <div className="flex items-center gap-3">
                           <CheckCircle className="h-4 w-4 text-green-500" />
-                          <span className="text-sm">{image.original_path}</span>
+                          <div className="flex-1 min-w-0">
+                            <FilenameDisplay 
+                              filePath={image.original_path}
+                              className="text-sm"
+                              maxLength={50}
+                              showFullPath={true}
+                            />
+                          </div>
                         </div>
                         <Badge variant="secondary">本地</Badge>
                       </div>
@@ -538,22 +548,39 @@ export default function Content() {
                         onCheckedChange={(checked) => handleImageSelect(image.id, checked as boolean)}
                       />
                       <div className="flex-1 min-w-0">
-                        {image.thumbnail && (
+                        {image.exists && (
                           <img
-                            src={image.thumbnail}
-                            alt="Thumbnail"
+                            src={convertFileSrc(image.absolute_path)}
+                            alt="Image preview"
                             className="w-full h-32 object-cover rounded-md mb-2"
+                            onError={(e) => {
+                              // 如果加载失败，隐藏图片
+                              e.currentTarget.style.display = 'none';
+                            }}
                           />
                         )}
                         <div className="space-y-1">
-                          <p className="font-medium text-sm truncate">{image.original_path.split('/').pop()}</p>
-                          <p className="text-xs text-gray-500">{image.original_path}</p>
+                          <FilenameDisplay 
+                            filePath={image.original_path}
+                            className="font-medium text-sm"
+                            maxLength={35}
+                            showTooltip={true}
+                          />
+                          <div className="text-xs text-gray-500">
+                            <FilenameDisplay 
+                              filePath={image.original_path}
+                              className=""
+                              maxLength={35}
+                              showFullPath={true}
+                              showTooltip={true}
+                            />
+                          </div>
                           <p className="text-xs text-gray-500">
                             Line {image.markdown_line}, Col {image.markdown_column}
                           </p>
                           <div className="flex items-center justify-between">
                             <span className="text-xs text-gray-500">
-                              {image.exists ? `${(image.size / 1024).toFixed(1)} KB` : "File not found"}
+                              {image.exists ? formatFileSizeHuman(image.size) : "File not found"}
                             </span>
                             <Badge variant={image.exists ? "default" : "destructive"}>
                               {image.exists ? "可用" : "缺失"}

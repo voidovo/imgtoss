@@ -16,6 +16,8 @@ import type { OSSConfig, UploadResult, UploadProgress } from "@/lib/types"
 import { NotificationType } from "@/lib/types"
 import { useProgressMonitoring } from "@/lib/hooks/use-progress-monitoring"
 import { NotificationSystem, ProgressNotificationCompact } from "@/components/ui/notification-system"
+import { FilenameDisplay } from "@/components/ui/filename-display"
+import { formatFileSizeHuman } from "@/lib/utils/format"
 
 interface UploadFile {
   id: string
@@ -54,14 +56,6 @@ export default function ImageUpload() {
     cancelUpload,
     retryUpload,
   } = useProgressMonitoring()
-
-  const formatFileSize = (bytes: number) => {
-    if (bytes === 0) return "0 Bytes"
-    const k = 1024
-    const sizes = ["Bytes", "KB", "MB", "GB"]
-    const i = Math.floor(Math.log(bytes) / Math.log(k))
-    return Number.parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i]
-  }
 
   // Load OSS configuration and start progress monitoring on component mount
   useEffect(() => {
@@ -118,7 +112,7 @@ export default function ImageUpload() {
     preview: URL.createObjectURL(file),
     status: "pending",
     progress: 0,
-    size: formatFileSize(file.size),
+    size: formatFileSizeHuman(file.size),
     path: (file as any).path || file.name, // Use file path if available (Tauri file dialog)
   })
 
@@ -582,7 +576,13 @@ export default function ImageUpload() {
                     className="w-12 h-12 object-cover rounded"
                   />
                   <div className="flex-1 min-w-0">
-                    <p className="font-medium text-gray-900 dark:text-white truncate">{file.file.name}</p>
+                    <div className="font-medium text-gray-900 dark:text-white">
+                      <FilenameDisplay 
+                        filePath={file.file.name}
+                        maxLength={25}
+                        showTooltip={true}
+                      />
+                    </div>
                     <p className="text-sm text-gray-600 dark:text-gray-400">{file.size}</p>
                     {file.status === "uploading" && <Progress value={file.progress} className="mt-2" />}
                     {file.status === "success" && file.url && (
