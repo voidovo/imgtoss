@@ -4,6 +4,7 @@ use image::{
     imageops::FilterType, DynamicImage, GenericImageView, ImageBuffer, ImageFormat, ImageReader,
     Rgb,
 };
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::Cursor;
 use std::path::Path;
@@ -418,6 +419,57 @@ impl ImageService {
         };
 
         Ok(base_quality)
+    }
+
+    /// Calculate SHA256 checksum for an image file
+    ///
+    /// # Arguments
+    /// * `image_path` - Path to the image file
+    ///
+    /// # Returns
+    /// * `Result<String>` - Hexadecimal SHA256 checksum
+    pub async fn calculate_checksum(&self, image_path: &str) -> Result<String> {
+        let image_path = image_path.to_string();
+
+        task::spawn_blocking(move || {
+            // Read the file
+            let data = fs::read(&image_path).map_err(|e| {
+                AppError::FileSystem(format!("Failed to read image file {}: {}", image_path, e))
+            })?;
+
+            // Calculate SHA256 hash
+            let mut hasher = Sha256::new();
+            hasher.update(&data);
+            let result = hasher.finalize();
+
+            // Convert to hex string
+            Ok(format!("{:x}", result))
+        })
+        .await
+        .map_err(|e| AppError::ImageProcessing(format!("Task join error: {}", e)))?
+    }
+
+    /// Calculate SHA256 checksum for image data
+    ///
+    /// # Arguments
+    /// * `image_data` - Image data as bytes
+    ///
+    /// # Returns
+    /// * `Result<String>` - Hexadecimal SHA256 checksum
+    pub async fn calculate_checksum_from_data(&self, image_data: &[u8]) -> Result<String> {
+        let data = image_data.to_vec();
+
+        task::spawn_blocking(move || {
+            // Calculate SHA256 hash
+            let mut hasher = Sha256::new();
+            hasher.update(&data);
+            let result = hasher.finalize();
+
+            // Convert to hex string
+            Ok(format!("{:x}", result))
+        })
+        .await
+        .map_err(|e| AppError::ImageProcessing(format!("Task join error: {}", e)))?
     }
 }
 

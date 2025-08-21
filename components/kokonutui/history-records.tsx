@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useMemo } from "react"
+import { useState, useMemo, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
@@ -12,7 +12,6 @@ import {
   Download,
   Trash2,
   Copy,
-  ExternalLink,
   Calendar,
   FileImage,
   HardDrive,
@@ -20,6 +19,8 @@ import {
   Clock,
   Eye,
   MoreHorizontal,
+  Loader2,
+  RefreshCw,
 } from "lucide-react"
 import {
   DropdownMenu,
@@ -29,114 +30,148 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { historyOperations } from "@/lib/tauri-api"
+import type { HistoryRecord, PaginatedResult, HistoryStatistics } from "@/lib/types"
 
-// Mock data for demonstration
-const mockHistoryData = [
-  {
-    id: "1",
-    filename: "screenshot-2024-01-15.png",
-    originalName: "Screenshot 2024-01-15 at 10.30.45.png",
-    url: "https://cdn.example.com/images/screenshot-2024-01-15.png",
-    provider: "AWS S3",
-    size: "2.4 MB",
-    uploadTime: "2024-01-15 10:31:22",
-    sha256: "a1b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef123456",
-    status: "success",
-    thumbnail: "/screenshot-of-code.png",
-  },
-  {
-    id: "2",
-    filename: "profile-avatar.jpg",
-    originalName: "my-profile-photo.jpg",
-    url: "https://cdn.example.com/images/profile-avatar.jpg",
-    provider: "Cloudinary",
-    size: "1.8 MB",
-    uploadTime: "2024-01-14 15:22:10",
-    sha256: "b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef1234567",
-    status: "success",
-    thumbnail: "/abstract-profile.png",
-  },
-  {
-    id: "3",
-    filename: "document-scan.pdf",
-    originalName: "important-document.pdf",
-    url: "https://cdn.example.com/files/document-scan.pdf",
-    provider: "Google Cloud",
-    size: "5.2 MB",
-    uploadTime: "2024-01-13 09:15:33",
-    sha256: "c3d4e5f6789012345678901234567890abcdef1234567890abcdef12345678",
-    status: "failed",
-    thumbnail: "/document-stack.png",
-  },
-  {
-    id: "4",
-    filename: "banner-image.webp",
-    originalName: "website-banner-final.webp",
-    url: "https://cdn.example.com/images/banner-image.webp",
-    provider: "AWS S3",
-    size: "890 KB",
-    uploadTime: "2024-01-12 14:45:18",
-    sha256: "d4e5f6789012345678901234567890abcdef1234567890abcdef123456789",
-    status: "success",
-    thumbnail: "/celebratory-banner.png",
-  },
-  {
-    id: "5",
-    filename: "presentation.pptx",
-    originalName: "quarterly-review-presentation.pptx",
-    url: "https://cdn.example.com/files/presentation.pptx",
-    provider: "Cloudinary",
-    size: "12.5 MB",
-    uploadTime: "2024-01-11 11:20:45",
-    sha256: "e5f6789012345678901234567890abcdef1234567890abcdef1234567890",
-    status: "success",
-    thumbnail: "/dynamic-presentation.png",
-  },
-]
+// Helper function to format file size
+function formatFileSize(bytes?: number): string {
+  if (!bytes || bytes === 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+}
+
+// Helper function to extract filename from file path
+function extractFilename(filePath: string): string {
+  return filePath.split('/').pop() || filePath;
+}
+
+// Helper function to format date
+function formatDate(dateString: string): string {
+  try {
+    return new Date(dateString).toLocaleString();
+  } catch {
+    return dateString;
+  }
+}
 
 export function HistoryRecords() {
   const [searchTerm, setSearchTerm] = useState("")
   const [selectedProvider, setSelectedProvider] = useState("all")
   const [selectedStatus, setSelectedStatus] = useState("all")
   const [selectedItems, setSelectedItems] = useState<string[]>([])
-  const [sortBy, setSortBy] = useState("uploadTime")
+  const [sortBy, setSortBy] = useState("timestamp")
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc")
+  const [currentPage, setCurrentPage] = useState(1)
+  const [pageSize] = useState(20)
 
-  // Filter and sort data
-  const filteredData = useMemo(() => {
-    const filtered = mockHistoryData.filter((item) => {
-      const matchesSearch =
-        item.filename.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        item.originalName.toLowerCase().includes(searchTerm.toLowerCase())
-      const matchesProvider = selectedProvider === "all" || item.provider === selectedProvider
-      const matchesStatus = selectedStatus === "all" || item.status === selectedStatus
+  // Data state
+  const [historyData, setHistoryData] = useState<PaginatedResult<HistoryRecord> | null>(null)
+  const [statistics, setStatistics] = useState<HistoryStatistics | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
 
-      return matchesSearch && matchesProvider && matchesStatus
-    })
+
+
+  // Load history data
+  const loadHistoryData = async () => {
+    try {
+      setLoading(true)
+      setError(null)
+
+      // Determine operation type filter
+      const operationType = selectedStatus === "all" ? undefined : selectedStatus;
+      const successOnly = selectedProvider === "success" ? true :
+        selectedProvider === "failed" ? false : undefined;
+
+      // Use search if there's a search term, otherwise use regular pagination
+      const result = searchTerm.trim()
+        ? await historyOperations.searchHistory(
+          searchTerm,
+          operationType,
+          successOnly,
+          undefined, // start_date
+          undefined, // end_date
+          currentPage,
+          pageSize
+        )
+        : await historyOperations.getUploadHistory(currentPage, pageSize);
+
+      setHistoryData(result);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load history data');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Load statistics
+  const loadStatistics = async () => {
+    try {
+      const stats = await historyOperations.getHistoryStatistics();
+      setStatistics(stats);
+    } catch (err) {
+      console.error('Failed to load statistics:', err);
+    }
+  };
+
+
+
+  // Load data on component mount and when filters change
+  useEffect(() => {
+    loadHistoryData();
+  }, [searchTerm, selectedProvider, selectedStatus, currentPage]);
+
+  // Load statistics on mount
+  useEffect(() => {
+    loadStatistics();
+  }, []);
+
+
+
+  // Handle search with debouncing
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (currentPage !== 1) {
+        setCurrentPage(1);
+      } else {
+        loadHistoryData();
+      }
+    }, 300);
+
+    return () => clearTimeout(timer);
+  }, [searchTerm]);
+
+  // Sort and filter data locally (for display purposes)
+  const processedData = useMemo(() => {
+    if (!historyData?.items) return [];
+
+    let processed = [...historyData.items];
 
     // Sort data
-    filtered.sort((a, b) => {
-      let aValue = a[sortBy as keyof typeof a]
-      let bValue = b[sortBy as keyof typeof b]
+    processed.sort((a, b) => {
+      let aValue: any = a[sortBy as keyof HistoryRecord];
+      let bValue: any = b[sortBy as keyof HistoryRecord];
 
-      if (sortBy === "uploadTime") {
-        aValue = new Date(aValue as string).getTime()
-        bValue = new Date(bValue as string).getTime()
+      if (sortBy === "timestamp") {
+        aValue = new Date(aValue).getTime();
+        bValue = new Date(bValue).getTime();
       }
 
       if (sortOrder === "asc") {
-        return aValue > bValue ? 1 : -1
+        return aValue > bValue ? 1 : -1;
       } else {
-        return aValue < bValue ? 1 : -1
+        return aValue < bValue ? 1 : -1;
       }
-    })
+    });
 
-    return filtered
-  }, [searchTerm, selectedProvider, selectedStatus, sortBy, sortOrder])
+    return processed;
+  }, [historyData, sortBy, sortOrder]);
 
   const handleSelectAll = (checked: boolean) => {
     if (checked) {
-      setSelectedItems(filteredData.map((item) => item.id))
+      setSelectedItems(processedData.map((item) => item.id))
     } else {
       setSelectedItems([])
     }
@@ -155,35 +190,77 @@ export function HistoryRecords() {
     // You could add a toast notification here
   }
 
-  const getStatusBadge = (status: string) => {
-    switch (status) {
-      case "success":
-        return (
-          <Badge variant="default" className="bg-green-100 text-green-800">
-            成功
-          </Badge>
-        )
-      case "failed":
-        return <Badge variant="destructive">失败</Badge>
-      case "uploading":
-        return <Badge variant="secondary">上传中</Badge>
-      default:
-        return <Badge variant="outline">未知</Badge>
+  const handleExportHistory = async () => {
+    try {
+      await historyOperations.exportHistoryToFile();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to export history');
+    }
+  };
+
+  const handleClearHistory = async () => {
+    if (confirm('Are you sure you want to clear all history? This action cannot be undone.')) {
+      try {
+        await historyOperations.clearHistory();
+        await loadHistoryData();
+        await loadStatistics();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to clear history');
+      }
+    }
+  };
+
+  const getStatusBadge = (success: boolean) => {
+    if (success) {
+      return (
+        <Badge variant="default" className="bg-green-100 text-green-800">
+          成功
+        </Badge>
+      )
+    } else {
+      return <Badge variant="destructive">失败</Badge>
     }
   }
 
-  const getProviderBadge = (provider: string) => {
+  const getOperationBadge = (operation: string) => {
     const colors = {
-      "AWS S3": "bg-orange-100 text-orange-800",
-      Cloudinary: "bg-blue-100 text-blue-800",
-      "Google Cloud": "bg-red-100 text-red-800",
+      "upload": "bg-blue-100 text-blue-800",
+      "replace": "bg-orange-100 text-orange-800",
+      "restore": "bg-purple-100 text-purple-800",
+      "backup": "bg-green-100 text-green-800",
+      "scan": "bg-gray-100 text-gray-800",
     }
 
     return (
-      <Badge variant="outline" className={colors[provider as keyof typeof colors] || "bg-gray-100 text-gray-800"}>
-        {provider}
+      <Badge variant="outline" className={colors[operation as keyof typeof colors] || "bg-gray-100 text-gray-800"}>
+        {operation}
       </Badge>
     )
+  }
+
+  if (error) {
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-3xl font-bold">历史记录</h1>
+            <p className="text-muted-foreground mt-1">管理和查看所有上传的文件记录</p>
+          </div>
+          <Button onClick={loadHistoryData} variant="outline">
+            <RefreshCw className="h-4 w-4 mr-2" />
+            重试
+          </Button>
+        </div>
+        <Card>
+          <CardContent className="pt-6">
+            <div className="text-center py-12">
+              <div className="text-red-600 mb-4">错误: {error}</div>
+              <Button onClick={loadHistoryData}>重新加载</Button>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    );
   }
 
   return (
@@ -195,16 +272,20 @@ export function HistoryRecords() {
           <p className="text-muted-foreground mt-1">管理和查看所有上传的文件记录</p>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm">
+          <Button variant="outline" size="sm" onClick={handleExportHistory}>
             <Download className="h-4 w-4 mr-2" />
             导出记录
           </Button>
           {selectedItems.length > 0 && (
-            <Button variant="destructive" size="sm">
+            <Button variant="destructive" size="sm" onClick={handleClearHistory}>
               <Trash2 className="h-4 w-4 mr-2" />
               删除选中 ({selectedItems.length})
             </Button>
           )}
+          <Button variant="outline" size="sm" onClick={loadHistoryData}>
+            <RefreshCw className="h-4 w-4 mr-2" />
+            刷新
+          </Button>
         </div>
       </div>
 
@@ -212,50 +293,54 @@ export function HistoryRecords() {
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">总文件数</CardTitle>
+            <CardTitle className="text-sm font-medium">总操作数</CardTitle>
             <FileImage className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{mockHistoryData.length}</div>
-            <p className="text-xs text-muted-foreground">+2 较昨日</p>
+            <div className="text-2xl font-bold">{statistics?.total_operations || 0}</div>
+            <p className="text-xs text-muted-foreground">历史记录总数</p>
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">成功上传</CardTitle>
+            <CardTitle className="text-sm font-medium">成功操作</CardTitle>
             <Clock className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-green-600">
-              {mockHistoryData.filter((item) => item.status === "success").length}
+              {statistics?.successful_operations || 0}
             </div>
-            <p className="text-xs text-muted-foreground">成功率 80%</p>
+            <p className="text-xs text-muted-foreground">
+              成功率 {statistics ? Math.round((statistics.successful_operations / statistics.total_operations) * 100) : 0}%
+            </p>
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">总存储大小</CardTitle>
+            <CardTitle className="text-sm font-medium">总处理大小</CardTitle>
             <HardDrive className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">22.8 MB</div>
-            <p className="text-xs text-muted-foreground">+5.2 MB 本周</p>
+            <div className="text-2xl font-bold">{formatFileSize(statistics?.total_size_uploaded)}</div>
+            <p className="text-xs text-muted-foreground">累计上传大小</p>
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">存储提供商</CardTitle>
+            <CardTitle className="text-sm font-medium">图片总数</CardTitle>
             <Hash className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">3</div>
-            <p className="text-xs text-muted-foreground">AWS S3, Cloudinary, GCP</p>
+            <div className="text-2xl font-bold">{statistics?.total_images_uploaded || 0}</div>
+            <p className="text-xs text-muted-foreground">已上传图片数量</p>
           </CardContent>
         </Card>
       </div>
+
+
 
       {/* Filters and Search */}
       <Card>
@@ -265,7 +350,7 @@ export function HistoryRecords() {
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                 <Input
-                  placeholder="搜索文件名或原始名称..."
+                  placeholder="搜索文件名或操作类型..."
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
                   className="pl-10"
@@ -275,13 +360,15 @@ export function HistoryRecords() {
 
             <Select value={selectedProvider} onValueChange={setSelectedProvider}>
               <SelectTrigger className="w-full md:w-[180px]">
-                <SelectValue placeholder="存储提供商" />
+                <SelectValue placeholder="操作类型" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">所有提供商</SelectItem>
-                <SelectItem value="AWS S3">AWS S3</SelectItem>
-                <SelectItem value="Cloudinary">Cloudinary</SelectItem>
-                <SelectItem value="Google Cloud">Google Cloud</SelectItem>
+                <SelectItem value="all">所有操作</SelectItem>
+                <SelectItem value="upload">上传</SelectItem>
+                <SelectItem value="replace">替换</SelectItem>
+                <SelectItem value="restore">恢复</SelectItem>
+                <SelectItem value="backup">备份</SelectItem>
+                <SelectItem value="scan">扫描</SelectItem>
               </SelectContent>
             </Select>
 
@@ -293,7 +380,6 @@ export function HistoryRecords() {
                 <SelectItem value="all">所有状态</SelectItem>
                 <SelectItem value="success">成功</SelectItem>
                 <SelectItem value="failed">失败</SelectItem>
-                <SelectItem value="uploading">上传中</SelectItem>
               </SelectContent>
             </Select>
 
@@ -309,12 +395,10 @@ export function HistoryRecords() {
                 <SelectValue placeholder="排序" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="uploadTime-desc">最新上传</SelectItem>
-                <SelectItem value="uploadTime-asc">最早上传</SelectItem>
-                <SelectItem value="filename-asc">文件名 A-Z</SelectItem>
-                <SelectItem value="filename-desc">文件名 Z-A</SelectItem>
-                <SelectItem value="size-desc">文件大小 ↓</SelectItem>
-                <SelectItem value="size-asc">文件大小 ↑</SelectItem>
+                <SelectItem value="timestamp-desc">最新时间</SelectItem>
+                <SelectItem value="timestamp-asc">最早时间</SelectItem>
+                <SelectItem value="operation-asc">操作类型 A-Z</SelectItem>
+                <SelectItem value="operation-desc">操作类型 Z-A</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -324,113 +408,136 @@ export function HistoryRecords() {
       {/* Records Table */}
       <Card>
         <CardContent className="p-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead className="w-12">
-                  <Checkbox
-                    checked={selectedItems.length === filteredData.length && filteredData.length > 0}
-                    onCheckedChange={handleSelectAll}
-                  />
-                </TableHead>
-                <TableHead>文件</TableHead>
-                <TableHead>存储提供商</TableHead>
-                <TableHead>文件大小</TableHead>
-                <TableHead>上传时间</TableHead>
-                <TableHead>状态</TableHead>
-                <TableHead>SHA256</TableHead>
-                <TableHead className="w-12">操作</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {filteredData.map((item) => (
-                <TableRow key={item.id}>
-                  <TableCell>
-                    <Checkbox
-                      checked={selectedItems.includes(item.id)}
-                      onCheckedChange={(checked) => handleSelectItem(item.id, checked as boolean)}
-                    />
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex items-center gap-3">
-                      <img
-                        src={item.thumbnail || "/placeholder.svg"}
-                        alt={item.filename}
-                        className="w-10 h-10 rounded object-cover bg-muted"
-                      />
-                      <div className="min-w-0 flex-1">
-                        <p className="font-medium truncate">{item.filename}</p>
-                        <p className="text-sm text-muted-foreground truncate">{item.originalName}</p>
-                      </div>
-                    </div>
-                  </TableCell>
-                  <TableCell>{getProviderBadge(item.provider)}</TableCell>
-                  <TableCell className="font-mono text-sm">{item.size}</TableCell>
-                  <TableCell>
-                    <div className="flex items-center gap-2">
-                      <Calendar className="h-4 w-4 text-muted-foreground" />
-                      <span className="text-sm">{item.uploadTime}</span>
-                    </div>
-                  </TableCell>
-                  <TableCell>{getStatusBadge(item.status)}</TableCell>
-                  <TableCell>
-                    <div className="flex items-center gap-2">
-                      <code className="text-xs bg-muted px-2 py-1 rounded font-mono">
-                        {item.sha256.substring(0, 8)}...
-                      </code>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => copyToClipboard(item.sha256)}
-                        className="h-6 w-6 p-0"
-                      >
-                        <Copy className="h-3 w-3" />
-                      </Button>
-                    </div>
-                  </TableCell>
-                  <TableCell>
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button variant="ghost" size="sm" className="h-8 w-8 p-0">
-                          <MoreHorizontal className="h-4 w-4" />
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        <DropdownMenuItem onClick={() => copyToClipboard(item.url)}>
-                          <Copy className="h-4 w-4 mr-2" />
-                          复制链接
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => window.open(item.url, "_blank")}>
-                          <ExternalLink className="h-4 w-4 mr-2" />
-                          在新窗口打开
-                        </DropdownMenuItem>
-                        <DropdownMenuItem>
-                          <Eye className="h-4 w-4 mr-2" />
-                          预览
-                        </DropdownMenuItem>
-                        <DropdownMenuSeparator />
-                        <DropdownMenuItem className="text-red-600">
-                          <Trash2 className="h-4 w-4 mr-2" />
-                          删除记录
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-
-          {filteredData.length === 0 && (
+          {loading ? (
             <div className="text-center py-12">
-              <FileImage className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-              <h3 className="text-lg font-medium mb-2">暂无记录</h3>
-              <p className="text-muted-foreground">
-                {searchTerm || selectedProvider !== "all" || selectedStatus !== "all"
-                  ? "没有找到符合条件的记录"
-                  : "还没有上传任何文件"}
-              </p>
+              <Loader2 className="h-8 w-8 animate-spin mx-auto mb-4" />
+              <p>加载历史记录中...</p>
             </div>
+          ) : (
+            <>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-12">
+                      <Checkbox
+                        checked={selectedItems.length === processedData.length && processedData.length > 0}
+                        onCheckedChange={handleSelectAll}
+                      />
+                    </TableHead>
+                    <TableHead>操作</TableHead>
+                    <TableHead>文件</TableHead>
+                    <TableHead>图片数量</TableHead>
+                    <TableHead>文件大小</TableHead>
+                    <TableHead>时间</TableHead>
+                    <TableHead>状态</TableHead>
+                    <TableHead className="w-12">操作</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {processedData.map((item) => (
+                    <TableRow key={item.id}>
+                      <TableCell>
+                        <Checkbox
+                          checked={selectedItems.includes(item.id)}
+                          onCheckedChange={(checked) => handleSelectItem(item.id, checked as boolean)}
+                        />
+                      </TableCell>
+                      <TableCell>{getOperationBadge(item.operation)}</TableCell>
+                      <TableCell>
+                        <div className="min-w-0 flex-1">
+                          <p className="font-medium truncate">
+                            {item.files.length > 0 ? extractFilename(item.files[0]) : 'No files'}
+                          </p>
+                          {item.files.length > 1 && (
+                            <p className="text-sm text-muted-foreground">
+                              +{item.files.length - 1} 个文件
+                            </p>
+                          )}
+                        </div>
+                      </TableCell>
+                      <TableCell className="font-mono text-sm">{item.image_count}</TableCell>
+                      <TableCell className="font-mono text-sm">{formatFileSize(item.total_size)}</TableCell>
+                      <TableCell>
+                        <div className="flex items-center gap-2">
+                          <Calendar className="h-4 w-4 text-muted-foreground" />
+                          <span className="text-sm">{formatDate(item.timestamp)}</span>
+                        </div>
+                      </TableCell>
+                      <TableCell>{getStatusBadge(item.success)}</TableCell>
+                      <TableCell>
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button variant="ghost" size="sm" className="h-8 w-8 p-0">
+                              <MoreHorizontal className="h-4 w-4" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuItem onClick={() => copyToClipboard(item.id)}>
+                              <Copy className="h-4 w-4 mr-2" />
+                              复制ID
+                            </DropdownMenuItem>
+                            {item.error_message && (
+                              <DropdownMenuItem onClick={() => copyToClipboard(item.error_message!)}>
+                                <Eye className="h-4 w-4 mr-2" />
+                                查看错误
+                              </DropdownMenuItem>
+                            )}
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem className="text-red-600">
+                              <Trash2 className="h-4 w-4 mr-2" />
+                              删除记录
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+
+              {processedData.length === 0 && (
+                <div className="text-center py-12">
+                  <FileImage className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+                  <h3 className="text-lg font-medium mb-2">暂无记录</h3>
+                  <p className="text-muted-foreground">
+                    {searchTerm || selectedProvider !== "all" || selectedStatus !== "all"
+                      ? "没有找到符合条件的记录"
+                      : "还没有任何操作记录"}
+                  </p>
+                </div>
+              )}
+
+              {/* Pagination */}
+              {historyData && historyData.total > pageSize && (
+                <div className="flex items-center justify-between px-6 py-4 border-t">
+                  <div className="text-sm text-muted-foreground">
+                    显示 {((currentPage - 1) * pageSize) + 1} 到 {Math.min(currentPage * pageSize, historyData.total)} 条，
+                    共 {historyData.total} 条记录
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setCurrentPage(Math.max(1, currentPage - 1))}
+                      disabled={currentPage === 1}
+                    >
+                      上一页
+                    </Button>
+                    <span className="text-sm">
+                      第 {currentPage} 页，共 {Math.ceil(historyData.total / pageSize)} 页
+                    </span>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setCurrentPage(currentPage + 1)}
+                      disabled={!historyData.has_more}
+                    >
+                      下一页
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </>
           )}
         </CardContent>
       </Card>

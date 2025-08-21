@@ -2,8 +2,8 @@
 
 import type React from "react"
 
-import { useState, useCallback, useRef } from "react"
-import { Upload, X, ImageIcon, CheckCircle, AlertCircle, Trash2, Eye, Copy } from "lucide-react"
+import { useState, useCallback, useRef, useEffect } from "react"
+import { Upload, X, ImageIcon, CheckCircle, AlertCircle, Trash2, Eye, Copy, RefreshCw } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Progress } from "@/components/ui/progress"
@@ -11,6 +11,11 @@ import { Badge } from "@/components/ui/badge"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { tauriAPI } from "@/lib/tauri-api"
+import type { OSSConfig, UploadResult, UploadProgress } from "@/lib/types"
+import { NotificationType } from "@/lib/types"
+import { useProgressMonitoring } from "@/lib/hooks/use-progress-monitoring"
+import { NotificationSystem, ProgressNotificationCompact } from "@/components/ui/notification-system"
 
 interface UploadFile {
   id: string
@@ -21,16 +26,34 @@ interface UploadFile {
   url?: string
   error?: string
   size: string
-  sha256?: string
+  path?: string // File path for Tauri API
 }
 
 export default function ImageUpload() {
   const [files, setFiles] = useState<UploadFile[]>([])
   const [isDragging, setIsDragging] = useState(false)
-  const [storageProvider, setStorageProvider] = useState("aliyun")
+  const [storageProvider, setStorageProvider] = useState("Aliyun")
   const [uploadPath, setUploadPath] = useState("images/")
   const [isUploading, setIsUploading] = useState(false)
+  const [config, setConfig] = useState<OSSConfig | null>(null)
+  const [batchSize, setBatchSize] = useState(3)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const progressInterval = useRef<NodeJS.Timeout | null>(null)
+  const [duplicateCheckEnabled, setDuplicateCheckEnabled] = useState(true)
+
+  // Progress monitoring hook
+  const {
+    uploadProgress,
+    notifications,
+    isMonitoring,
+    startMonitoring,
+    stopMonitoring,
+    dismissNotification,
+    clearAllNotifications,
+    sendNotification,
+    cancelUpload,
+    retryUpload,
+  } = useProgressMonitoring()
 
   const formatFileSize = (bytes: number) => {
     if (bytes === 0) return "0 Bytes"
@@ -39,6 +62,53 @@ export default function ImageUpload() {
     const i = Math.floor(Math.log(bytes) / Math.log(k))
     return Number.parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i]
   }
+
+  // Load OSS configuration and start progress monitoring on component mount
+  useEffect(() => {
+    const loadConfig = async () => {
+      try {
+        const loadedConfig = await tauriAPI.loadOSSConfig()
+        setConfig(loadedConfig)
+        if (loadedConfig) {
+          setStorageProvider(loadedConfig.provider)
+        }
+      } catch (error) {
+        console.error("Failed to load OSS config:", error)
+      }
+    }
+
+    const initializeMonitoring = async () => {
+      try {
+        await startMonitoring()
+      } catch (error) {
+        console.error("Failed to start progress monitoring:", error)
+      }
+    }
+
+    loadConfig()
+    initializeMonitoring()
+
+    return () => {
+      stopMonitoring()
+    }
+  }, [startMonitoring, stopMonitoring])
+
+  // Update file progress from the monitoring hook
+  useEffect(() => {
+    setFiles(prevFiles =>
+      prevFiles.map(file => {
+        const progress = uploadProgress.get(file.id)
+        if (progress) {
+          return {
+            ...file,
+            progress: progress.progress,
+            status: progress.progress >= 100 ? "success" : "uploading"
+          }
+        }
+        return file
+      })
+    )
+  }, [uploadProgress])
 
   const generateId = () => Math.random().toString(36).substr(2, 9)
 
@@ -49,9 +119,10 @@ export default function ImageUpload() {
     status: "pending",
     progress: 0,
     size: formatFileSize(file.size),
+    path: (file as any).path || file.name, // Use file path if available (Tauri file dialog)
   })
 
-  const handleFiles = useCallback((newFiles: FileList | File[]) => {
+  const handleFiles = useCallback(async (newFiles: FileList | File[]) => {
     const fileArray = Array.from(newFiles)
     const imageFiles = fileArray.filter((file) => file.type.startsWith("image/"))
 
@@ -60,8 +131,45 @@ export default function ImageUpload() {
     }
 
     const uploadFiles = imageFiles.map(createUploadFile)
-    setFiles((prev) => [...prev, ...uploadFiles])
-  }, [])
+
+    // 如果启用了重复检测，立即检查新添加的文件
+    if (duplicateCheckEnabled && uploadFiles.length > 0) {
+      try {
+        // 获取文件路径进行重复检测
+        const filePaths = uploadFiles.map(f => f.path || f.file.name)
+        const duplicateResults = await tauriAPI.checkDuplicatesBatch(filePaths)
+
+        // 标记重复的文件
+        const filesWithDuplicateStatus = uploadFiles.map((file, index) => {
+          const duplicateResult = duplicateResults[index]
+          if (duplicateResult?.is_duplicate) {
+            return {
+              ...file,
+              status: "error" as const,
+              error: `重复图片 - 已存在: ${duplicateResult.existing_url || '未知链接'}`
+            }
+          }
+          return file
+        })
+
+        setFiles((prev) => [...prev, ...filesWithDuplicateStatus])
+
+        // 如果有重复文件，显示提示
+        const duplicateCount = duplicateResults.filter(r => r.is_duplicate).length
+        if (duplicateCount > 0) {
+          alert(`检测到 ${duplicateCount} 个重复图片，已自动标记。您可以选择移除这些重复文件。`)
+        }
+      } catch (error) {
+        console.error("重复检测失败:", error)
+        // 如果检测失败，仍然添加文件但显示警告
+        setFiles((prev) => [...prev, ...uploadFiles])
+        alert("重复检测失败，文件已添加但建议手动检查是否重复")
+      }
+    } else {
+      // 如果未启用重复检测，直接添加文件
+      setFiles((prev) => [...prev, ...uploadFiles])
+    }
+  }, [duplicateCheckEnabled])
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault()
@@ -111,43 +219,151 @@ export default function ImageUpload() {
     setFiles([])
   }
 
-  const simulateUpload = async (file: UploadFile) => {
-    setFiles((prev) => prev.map((f) => (f.id === file.id ? { ...f, status: "uploading" as const } : f)))
-
-    for (let progress = 0; progress <= 100; progress += 10) {
-      await new Promise((resolve) => setTimeout(resolve, 200))
-      setFiles((prev) => prev.map((f) => (f.id === file.id ? { ...f, progress } : f)))
+  const uploadFiles = async (filesToUpload: UploadFile[]) => {
+    if (!config) {
+      alert("请先配置存储服务")
+      return
     }
 
-    // Simulate success or error
-    const isSuccess = Math.random() > 0.1 // 90% success rate
-    setFiles((prev) =>
-      prev.map((f) =>
-        f.id === file.id
-          ? {
-              ...f,
-              status: isSuccess ? ("success" as const) : ("error" as const),
-              url: isSuccess ? `https://cdn.example.com/${uploadPath}${file.file.name}` : undefined,
-              error: isSuccess ? undefined : "上传失败，请重试",
-              sha256: isSuccess ? "a1b2c3d4e5f6..." : undefined,
+    setIsUploading(true)
+
+    try {
+      // Mark files as uploading
+      setFiles(prev =>
+        prev.map(f =>
+          filesToUpload.some(upload => upload.id === f.id)
+            ? { ...f, status: "uploading" as const, progress: 0 }
+            : f
+        )
+      )
+
+      // Get file paths for upload
+      const imagePaths = filesToUpload.map(f => f.path || f.file.name)
+
+      // Use batch upload for better performance
+      const results = await tauriAPI.uploadImagesBatch(imagePaths, config, batchSize)
+
+      // Update files with results
+      setFiles(prev =>
+        prev.map(file => {
+          const uploadFile = filesToUpload.find(f => f.id === file.id)
+          if (!uploadFile) return file
+
+          const result = results.find(r => r.image_id === file.id)
+          if (result) {
+            return {
+              ...file,
+              status: result.success ? "success" as const : "error" as const,
+              progress: result.success ? 100 : file.progress,
+              url: result.uploaded_url,
+              error: result.error,
             }
-          : f,
-      ),
-    )
+          }
+          return file
+        })
+      )
+
+    } catch (error) {
+      console.error("Upload failed:", error)
+
+      // Mark all uploading files as failed
+      setFiles(prev =>
+        prev.map(f =>
+          filesToUpload.some(upload => upload.id === f.id)
+            ? { ...f, status: "error" as const, error: String(error) }
+            : f
+        )
+      )
+    } finally {
+      setIsUploading(false)
+    }
   }
 
   const uploadAll = async () => {
-    setIsUploading(true)
+    // 只上传状态为 "pending" 的文件（排除重复文件）
     const pendingFiles = files.filter((f) => f.status === "pending")
-
-    // Upload files in batches of 3
-    for (let i = 0; i < pendingFiles.length; i += 3) {
-      const batch = pendingFiles.slice(i, i + 3)
-      await Promise.all(batch.map(simulateUpload))
+    if (pendingFiles.length === 0) {
+      const errorFiles = files.filter((f) => f.status === "error")
+      if (errorFiles.length > 0) {
+        alert("没有可上传的文件。请移除重复或错误的文件后重试。")
+      }
+      return
     }
 
-    setIsUploading(false)
+    await uploadFiles(pendingFiles)
   }
+
+  const cancelFileUpload = async (fileId: string) => {
+    try {
+      await cancelUpload(fileId)
+      setFiles(prev =>
+        prev.map(f =>
+          f.id === fileId
+            ? { ...f, status: "error" as const, error: "Upload cancelled by user" }
+            : f
+        )
+      )
+    } catch (error) {
+      console.error("Failed to cancel upload:", error)
+    }
+  }
+
+  const retryFileUpload = async (fileId: string) => {
+    const file = files.find(f => f.id === fileId)
+    if (!file) return
+
+    try {
+      await retryUpload(fileId)
+      setFiles(prev =>
+        prev.map(f =>
+          f.id === fileId
+            ? { ...f, status: "uploading" as const, progress: 0, error: undefined }
+            : f
+        )
+      )
+    } catch (error) {
+      console.error("Failed to retry upload:", error)
+      await sendNotification({
+        type: NotificationType.Error,
+        title: "Retry Failed",
+        message: `Failed to retry upload for ${file.file.name}`,
+        dismissible: true,
+        auto_dismiss: false,
+      })
+    }
+  }
+
+
+
+
+
+  const removeDuplicateFiles = () => {
+    setFiles(prev => {
+      const filesToRemove = prev.filter(f => f.status === "error" && f.error?.includes("重复图片"))
+      filesToRemove.forEach(file => {
+        if (file.preview) {
+          URL.revokeObjectURL(file.preview)
+        }
+      })
+      return prev.filter(f => !(f.status === "error" && f.error?.includes("重复图片")))
+    })
+  }
+
+  const removeAllErrorFiles = () => {
+    setFiles(prev => {
+      const filesToRemove = prev.filter(f => f.status === "error")
+      filesToRemove.forEach(file => {
+        if (file.preview) {
+          URL.revokeObjectURL(file.preview)
+        }
+      })
+      return prev.filter(f => f.status !== "error")
+    })
+  }
+
+
+
+
 
   const copyUrl = (url: string) => {
     navigator.clipboard.writeText(url)
@@ -187,7 +403,7 @@ export default function ImageUpload() {
           <CardTitle className="text-lg">上传配置</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
             <div>
               <Label htmlFor="upload-path">上传路径</Label>
               <Input
@@ -204,13 +420,49 @@ export default function ImageUpload() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="aliyun">阿里云 OSS</SelectItem>
-                  <SelectItem value="tencent">腾讯云 COS</SelectItem>
-                  <SelectItem value="aws">Amazon S3</SelectItem>
+                  <SelectItem value="Aliyun">阿里云 OSS</SelectItem>
+                  <SelectItem value="Tencent">腾讯云 COS</SelectItem>
+                  <SelectItem value="AWS">Amazon S3</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label htmlFor="batch-size">批量大小</Label>
+              <Select value={batchSize.toString()} onValueChange={(value) => setBatchSize(parseInt(value))}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="1">1 (单个)</SelectItem>
+                  <SelectItem value="3">3 (推荐)</SelectItem>
+                  <SelectItem value="5">5</SelectItem>
+                  <SelectItem value="10">10 (最大)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label htmlFor="duplicate-check">重复检测</Label>
+              <Select
+                value={duplicateCheckEnabled ? "enabled" : "disabled"}
+                onValueChange={(value) => setDuplicateCheckEnabled(value === "enabled")}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="enabled">启用</SelectItem>
+                  <SelectItem value="disabled">禁用</SelectItem>
                 </SelectContent>
               </Select>
             </div>
           </div>
+          {!config && (
+            <div className="p-3 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg">
+              <p className="text-sm text-yellow-800 dark:text-yellow-200">
+                请先在存储配置页面配置您的对象存储服务
+              </p>
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -218,18 +470,20 @@ export default function ImageUpload() {
       <Card>
         <CardContent className="p-6">
           <div
-            className={`border-2 border-dashed rounded-lg p-8 text-center transition-colors ${
-              isDragging
-                ? "border-blue-500 bg-blue-50 dark:bg-blue-900/20"
-                : "border-gray-300 dark:border-gray-600 hover:border-gray-400 dark:hover:border-gray-500"
-            }`}
+            className={`border-2 border-dashed rounded-lg p-8 text-center transition-colors ${isDragging
+              ? "border-blue-500 bg-blue-50 dark:bg-blue-900/20"
+              : "border-gray-300 dark:border-gray-600 hover:border-gray-400 dark:hover:border-gray-500"
+              }`}
             onDragOver={handleDragOver}
             onDragLeave={handleDragLeave}
             onDrop={handleDrop}
           >
             <Upload className="h-12 w-12 text-gray-400 mx-auto mb-4" />
             <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-2">拖拽图片到此处或点击选择</h3>
-            <p className="text-gray-600 dark:text-gray-400 mb-4">支持 JPG、PNG、GIF、WebP 格式，单个文件最大 10MB</p>
+            <p className="text-gray-600 dark:text-gray-400 mb-4">
+              支持 JPG、PNG、GIF、WebP 格式，单个文件最大 10MB
+              {duplicateCheckEnabled && <span className="block text-sm text-blue-600 mt-1">✓ 已启用重复检测</span>}
+            </p>
             <Button onClick={() => fileInputRef.current?.click()}>选择图片</Button>
             <input
               ref={fileInputRef}
@@ -294,14 +548,26 @@ export default function ImageUpload() {
               <div className="flex gap-2">
                 <Button
                   onClick={uploadAll}
-                  disabled={isUploading || files.every((f) => f.status !== "pending")}
+                  disabled={!config || isUploading || files.every((f) => f.status !== "pending")}
                   className="bg-blue-600 hover:bg-blue-700"
                 >
                   {isUploading ? "上传中..." : "开始上传"}
                 </Button>
+                {files.some(f => f.status === "error" && f.error?.includes("重复图片")) && (
+                  <Button variant="outline" onClick={removeDuplicateFiles}>
+                    <AlertCircle className="h-4 w-4 mr-2" />
+                    移除重复
+                  </Button>
+                )}
+                {files.some(f => f.status === "error") && (
+                  <Button variant="outline" onClick={removeAllErrorFiles}>
+                    <X className="h-4 w-4 mr-2" />
+                    移除错误
+                  </Button>
+                )}
                 <Button variant="outline" onClick={clearAll}>
                   <Trash2 className="h-4 w-4 mr-2" />
-                  清空
+                  清空全部
                 </Button>
               </div>
             </div>
@@ -328,6 +594,22 @@ export default function ImageUpload() {
                         <Button size="sm" variant="outline" onClick={() => window.open(file.url, "_blank")}>
                           <Eye className="h-3 w-3 mr-1" />
                           预览
+                        </Button>
+                      </div>
+                    )}
+                    {file.status === "error" && (
+                      <div className="flex items-center gap-2 mt-2">
+                        <Button size="sm" variant="outline" onClick={() => retryFileUpload(file.id)}>
+                          <RefreshCw className="h-3 w-3 mr-1" />
+                          重试
+                        </Button>
+                      </div>
+                    )}
+                    {file.status === "uploading" && (
+                      <div className="flex items-center gap-2 mt-2">
+                        <Button size="sm" variant="outline" onClick={() => cancelFileUpload(file.id)}>
+                          <X className="h-3 w-3 mr-1" />
+                          取消
                         </Button>
                       </div>
                     )}
@@ -360,6 +642,19 @@ export default function ImageUpload() {
           </CardContent>
         </Card>
       )}
+
+      {/* Notification System */}
+      <NotificationSystem
+        notifications={notifications}
+        onDismiss={dismissNotification}
+        onClearAll={clearAllNotifications}
+      />
+
+      {/* Compact Progress Notification */}
+      <ProgressNotificationCompact
+        progress={uploadProgress}
+        onCancel={cancelFileUpload}
+      />
     </div>
   )
 }

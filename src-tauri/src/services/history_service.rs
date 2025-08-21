@@ -404,6 +404,40 @@ impl HistoryService {
         Ok(operations)
     }
 
+    // Duplicate Detection
+    pub async fn find_duplicate_by_checksum(&self, checksum: &str) -> Result<Option<HistoryRecord>, AppError> {
+        let records = self.load_history_records().await?;
+        
+        // Look for a record with matching checksum in metadata
+        for record in records {
+            if let Some(record_checksum) = record.metadata.get("checksum") {
+                if record_checksum == checksum {
+                    return Ok(Some(record));
+                }
+            }
+        }
+        
+        Ok(None)
+    }
+
+    pub async fn get_duplicates_by_checksum(&self, checksums: &[String]) -> Result<Vec<(String, HistoryRecord)>, AppError> {
+        let records = self.load_history_records().await?;
+        let mut duplicates = Vec::new();
+        
+        for checksum in checksums {
+            for record in &records {
+                if let Some(record_checksum) = record.metadata.get("checksum") {
+                    if record_checksum == checksum {
+                        duplicates.push((checksum.clone(), record.clone()));
+                        break; // Only need the first match per checksum
+                    }
+                }
+            }
+        }
+        
+        Ok(duplicates)
+    }
+
     // Statistics
     pub async fn get_statistics(&self) -> Result<HistoryStatistics, AppError> {
         let records = self.load_history_records().await?;

@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
 use std::time::SystemTime;
-use std::collections::HashMap;
 
 #[cfg(test)]
 mod tests;
@@ -316,6 +315,163 @@ impl ImageReference {
             markdown_line,
             markdown_column,
             thumbnail: None, // Will be set during validation for existing images
+        }
+    }
+}
+
+// ============================================================================
+// System Health and Monitoring Models
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SystemHealth {
+    pub status: HealthStatus,
+    pub uptime: u64, // seconds
+    pub memory_usage: u64, // bytes
+    pub disk_space: u64, // bytes available
+    pub active_uploads: u32,
+    pub last_check: chrono::DateTime<chrono::Utc>,
+    pub errors: Vec<HealthError>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum HealthStatus {
+    Healthy,
+    Warning,
+    Critical,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HealthError {
+    pub component: String,
+    pub message: String,
+    pub severity: ErrorSeverity,
+    pub timestamp: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ErrorSeverity {
+    Low,
+    Medium,
+    High,
+    Critical,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NotificationConfig {
+    pub enabled: bool,
+    pub show_progress: bool,
+    pub show_completion: bool,
+    pub show_errors: bool,
+    pub auto_dismiss_success: bool,
+    pub dismiss_timeout: u64, // milliseconds
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProgressNotification {
+    pub id: String,
+    pub notification_type: NotificationType,
+    pub title: String,
+    pub message: String,
+    pub progress: Option<f32>,
+    pub timestamp: chrono::DateTime<chrono::Utc>,
+    pub dismissible: bool,
+    pub auto_dismiss: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum NotificationType {
+    Info,
+    Success,
+    Warning,
+    Error,
+    Progress,
+}
+
+// ============================================================================
+// Upload Task Management Models
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UploadTaskManager {
+    pub active_tasks: std::collections::HashMap<String, UploadTaskInfo>,
+    pub completed_tasks: Vec<UploadTaskInfo>,
+    pub failed_tasks: Vec<UploadTaskInfo>,
+    pub cancelled_tasks: Vec<UploadTaskInfo>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UploadTaskInfo {
+    pub id: String,
+    pub image_path: String,
+    pub status: UploadTaskStatus,
+    pub progress: UploadProgress,
+    pub start_time: chrono::DateTime<chrono::Utc>,
+    pub end_time: Option<chrono::DateTime<chrono::Utc>>,
+    pub retry_count: u32,
+    pub max_retries: u32,
+    pub error: Option<String>,
+    pub cancellation_token: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum UploadTaskStatus {
+    Queued,
+    Starting,
+    Uploading,
+    Completed,
+    Failed,
+    Cancelled,
+    Retrying,
+}
+
+impl Default for SystemHealth {
+    fn default() -> Self {
+        Self {
+            status: HealthStatus::Healthy,
+            uptime: 0,
+            memory_usage: 0,
+            disk_space: 0,
+            active_uploads: 0,
+            last_check: chrono::Utc::now(),
+            errors: Vec::new(),
+        }
+    }
+}
+
+impl Default for NotificationConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            show_progress: true,
+            show_completion: true,
+            show_errors: true,
+            auto_dismiss_success: true,
+            dismiss_timeout: 5000, // 5 seconds
+        }
+    }
+}
+
+impl UploadTaskInfo {
+    pub fn new(image_path: String, max_retries: u32) -> Self {
+        let id = uuid::Uuid::new_v4().to_string();
+        Self {
+            id: id.clone(),
+            image_path,
+            status: UploadTaskStatus::Queued,
+            progress: UploadProgress {
+                image_id: id,
+                progress: 0.0,
+                bytes_uploaded: 0,
+                total_bytes: 0,
+                speed: None,
+            },
+            start_time: chrono::Utc::now(),
+            end_time: None,
+            retry_count: 0,
+            max_retries,
+            error: None,
+            cancellation_token: None,
         }
     }
 }
