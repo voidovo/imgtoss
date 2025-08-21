@@ -10,6 +10,7 @@ import type {
   OSSConfig,
   OSSConnectionTest,
   ConfigValidation,
+  SaveOptions,
   ObjectInfo,
   LinkReplacement,
   BackupInfo,
@@ -118,8 +119,8 @@ export class TauriAPI {
   /**
    * Save OSS configuration to local storage
    */
-  async saveOSSConfig(config: OSSConfig): Promise<void> {
-    return invoke<void>('save_oss_config', { config });
+  async saveOSSConfig(config: OSSConfig, options?: SaveOptions): Promise<void> {
+    return invoke<void>('save_oss_config', { config, options });
   }
 
   /**
@@ -479,7 +480,7 @@ export const uploadOperations = {
 };
 
 export const configOperations = {
-  saveOSSConfig: (config: OSSConfig) => tauriAPI.saveOSSConfig(config),
+  saveOSSConfig: (config: OSSConfig, options?: SaveOptions) => tauriAPI.saveOSSConfig(config, options),
   loadOSSConfig: () => tauriAPI.loadOSSConfig(),
   testOSSConnection: (config: OSSConfig) => tauriAPI.testOSSConnection(config),
   validateOSSConfig: (config: OSSConfig) => tauriAPI.validateOSSConfig(config),

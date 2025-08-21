@@ -11,20 +11,20 @@ import { OSSProvider, type OSSConfig } from '../types';
 export async function scanMarkdownExample() {
   try {
     const filePaths = ['/path/to/document.md', '/path/to/another.md'];
-    
+
     // Using the centralized API
     const results = await tauriAPI.scanMarkdownFiles(filePaths);
-    
+
     // Or using the convenience method
     // const results = await fileOperations.scanMarkdownFiles(filePaths);
-    
+
     console.log('Scan results:', results);
-    
+
     // Process results
     for (const result of results) {
       if (result.status === 'Success') {
         console.log(`Found ${result.images.length} images in ${result.file_path}`);
-        
+
         // Get detailed info for each image
         for (const image of result.images) {
           if (image.exists) {
@@ -36,7 +36,7 @@ export async function scanMarkdownExample() {
         console.error(`Error scanning ${result.file_path}:`, result.error);
       }
     }
-    
+
     return results;
   } catch (error) {
     console.error('Failed to scan markdown files:', error);
@@ -67,7 +67,7 @@ export async function configureOSSExample() {
       () => tauriAPI.validateOSSConfig(config),
       'Configuration validation'
     );
-    
+
     if (!validation.valid) {
       console.error('Configuration errors:', validation.errors);
       return false;
@@ -80,18 +80,18 @@ export async function configureOSSExample() {
       2000,
       'OSS connection test'
     );
-    
+
     if (!connectionTest.success) {
       console.error('Connection test failed:', connectionTest.error);
       return false;
     }
-    
+
     console.log(`Connection successful! Latency: ${connectionTest.latency}ms`);
 
     // Save configuration
     await tauriAPI.saveOSSConfig(config);
     console.log('Configuration saved successfully');
-    
+
     return true;
   } catch (error) {
     if (error instanceof TauriError) {
@@ -118,28 +118,28 @@ export async function uploadImagesExample() {
 
     // Example image IDs (would come from scanning results)
     const imageIds = ['image-1-uuid', 'image-2-uuid', 'image-3-uuid'];
-    
+
     console.log(`Starting upload of ${imageIds.length} images...`);
-    
+
     // Start upload
     const uploadResults = await tauriAPI.uploadImages(imageIds, config);
-    
+
     // Process results
     const successful = uploadResults.filter(r => r.success);
     const failed = uploadResults.filter(r => !r.success);
-    
+
     console.log(`Upload completed: ${successful.length} successful, ${failed.length} failed`);
-    
+
     // Log successful uploads
     for (const result of successful) {
       console.log(`✓ ${result.image_id}: ${result.uploaded_url}`);
     }
-    
+
     // Log failed uploads
     for (const result of failed) {
       console.error(`✗ ${result.image_id}: ${result.error}`);
     }
-    
+
     return uploadResults;
   } catch (error) {
     console.error('Upload failed:', error);
@@ -154,23 +154,23 @@ export async function manageHistoryExample() {
   try {
     // Get paginated history
     const historyPage = await tauriAPI.getUploadHistory(1, 10);
-    
+
     console.log(`History: ${historyPage.items.length} items (${historyPage.total} total)`);
-    
+
     // Display recent operations
     for (const record of historyPage.items) {
       const status = record.success ? '✓' : '✗';
       const duration = record.duration ? `${record.duration}ms` : 'N/A';
-      
+
       console.log(
         `${status} ${record.operation} - ${record.image_count} images - ${duration} - ${record.timestamp}`
       );
-      
+
       if (!record.success && record.error_message) {
         console.log(`  Error: ${record.error_message}`);
       }
     }
-    
+
     // Get statistics
     const stats = await tauriAPI.getHistoryStatistics();
     console.log('Statistics:', {
@@ -179,7 +179,7 @@ export async function manageHistoryExample() {
       totalImagesUploaded: stats.total_images_uploaded,
       averageDuration: `${stats.average_operation_duration}ms`,
     });
-    
+
     return { history: historyPage, stats };
   } catch (error) {
     console.error('Failed to get history:', error);
@@ -192,27 +192,27 @@ export async function manageHistoryExample() {
  */
 export async function backupAndRecoveryExample() {
   const filePath = '/path/to/document.md';
-  
+
   try {
     // Create backup before modification
     console.log('Creating backup...');
     const backup = await tauriAPI.createBackup(filePath);
     console.log(`Backup created: ${backup.id} -> ${backup.backup_path}`);
-    
+
     // Simulate file modification (would be done by link replacement)
     console.log('File would be modified here...');
-    
+
     // List all backups for this file
     const backups = await tauriAPI.listBackups(filePath);
     console.log(`Found ${backups.length} backups for ${filePath}`);
-    
+
     // If something goes wrong, restore from backup
     if (Math.random() > 0.5) { // Simulate random failure
       console.log('Simulating failure - restoring from backup...');
       await tauriAPI.restoreFromBackup(backup.id);
       console.log('File restored successfully');
     }
-    
+
     return backup;
   } catch (error) {
     console.error('Backup/recovery failed:', error);
@@ -226,10 +226,10 @@ export async function backupAndRecoveryExample() {
 export async function completeWorkflowExample() {
   try {
     console.log('Starting complete workflow...');
-    
+
     // 1. Scan markdown files
     const scanResults = await scanMarkdownExample();
-    
+
     // 2. Extract image IDs that exist
     const imageIds: string[] = [];
     for (const result of scanResults) {
@@ -241,21 +241,21 @@ export async function completeWorkflowExample() {
         }
       }
     }
-    
+
     if (imageIds.length === 0) {
       console.log('No images found to upload');
       return;
     }
-    
+
     // 3. Upload images
     console.log(`Uploading ${imageIds.length} images...`);
     const config = await tauriAPI.loadOSSConfig();
     if (!config) {
       throw new Error('No OSS configuration found');
     }
-    
+
     const uploadResults = await tauriAPI.uploadImages(imageIds, config);
-    
+
     // 4. Prepare link replacements
     const replacements = [];
     for (const result of uploadResults) {
@@ -275,14 +275,14 @@ export async function completeWorkflowExample() {
         }
       }
     }
-    
+
     // 5. Replace links in markdown files
     if (replacements.length > 0) {
       console.log(`Replacing ${replacements.length} links...`);
       const replacementResult = await tauriAPI.replaceMarkdownLinksWithResult(replacements);
-      
+
       console.log(`Replacement completed: ${replacementResult.total_successful_replacements} successful`);
-      
+
       // 6. Add to history
       await tauriAPI.addHistoryRecord(
         'complete_workflow',
@@ -295,11 +295,11 @@ export async function completeWorkflowExample() {
         replacementResult.total_failed_replacements > 0 ? 'Some replacements failed' : undefined
       );
     }
-    
+
     console.log('Workflow completed successfully!');
   } catch (error) {
     console.error('Workflow failed:', error);
-    
+
     // Add failed operation to history
     try {
       await tauriAPI.addHistoryRecord(
@@ -315,7 +315,7 @@ export async function completeWorkflowExample() {
     } catch (historyError) {
       console.error('Failed to record error in history:', historyError);
     }
-    
+
     throw error;
   }
 }

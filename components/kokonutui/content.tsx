@@ -176,10 +176,11 @@ export default function Content() {
 
     try {
       // Step 1: Upload selected images
-      const selectedImageIds = Array.from(state.selectedImages)
+      const selectedImages = detectedImages.filter(img => state.selectedImages.has(img.id))
+      const selectedImagePaths = selectedImages.map(img => img.absolute_path)
       setState(prev => ({ ...prev, processingProgress: 25 }))
 
-      const uploadResults = await tauriAPI.uploadImages(selectedImageIds, ossConfig)
+      const uploadResults = await tauriAPI.uploadImages(selectedImagePaths, ossConfig)
       setState(prev => ({ ...prev, processingProgress: 50 }))
 
       // Step 2: Create link replacements
@@ -222,7 +223,7 @@ export default function Content() {
       await tauriAPI.addHistoryRecord(
         "replace",
         state.selectedFiles,
-        replacements.length,
+        state.selectedImages.size,
         true,
         undefined,
         undefined,

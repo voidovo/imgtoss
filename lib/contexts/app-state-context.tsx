@@ -10,8 +10,8 @@ import type {
   NotificationConfig,
   ProgressNotification,
   AppError,
-  ErrorType,
 } from '../types';
+import { ErrorType } from '../types';
 
 // ============================================================================
 // State Types

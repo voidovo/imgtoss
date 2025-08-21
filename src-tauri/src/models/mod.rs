@@ -265,6 +265,11 @@ pub struct ConfigValidation {
     pub connection_test: Option<OSSConnectionTest>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SaveOptions {
+    pub force_revalidate: bool,
+}
+
 // ============================================================================
 // Implementation Helpers
 // ============================================================================

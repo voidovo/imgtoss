@@ -330,7 +330,7 @@ mod tests {
     async fn test_save_oss_config_invalid() {
         let mut config = create_test_oss_config();
         config.bucket = "".to_string();
-        let result = save_oss_config(config).await;
+        let result = save_oss_config(config, None).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Bucket name cannot be empty"));
     }
