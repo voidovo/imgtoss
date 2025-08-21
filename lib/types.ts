@@ -234,6 +234,10 @@ export interface ConfigValidation {
   connection_test?: OSSConnectionTest;
 }
 
+export interface SaveOptions {
+  force_revalidate: boolean;
+}
+
 // ============================================================================
 // Error Types
 // ============================================================================

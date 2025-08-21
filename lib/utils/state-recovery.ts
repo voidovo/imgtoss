@@ -7,8 +7,8 @@ import type {
   UploadProgress, 
   SystemHealth, 
   HistoryStatistics,
-  UserPreferences 
 } from '../types';
+import type { UserPreferences } from '../contexts/app-state-context';
 
 export interface RecoveryState {
   timestamp: string;

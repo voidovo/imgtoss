@@ -7,11 +7,25 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
-import { AlertCircle, CheckCircle, Cloud, Database, Globe, Key, Plus, Settings, Trash2, TestTube, Download, Upload, Loader2 } from "lucide-react"
+import { AlertCircle, AlertTriangle, CheckCircle, Cloud, Database, Globe, Key, Plus, Settings, Trash2, TestTube, Download, Upload, Loader2 } from "lucide-react"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { configOperations } from "@/lib/tauri-api"
 import { OSSConfig, OSSProvider, OSSConnectionTest, ConfigValidation } from "@/lib/types"
+import type { SaveOptions } from "@/lib/types"
 import { parseTauriError } from "@/lib/error-handler"
+
+// Calculate hash for core connection parameters only
+function getCoreConfigHash(config: OSSConfig): string {
+  const coreConfig = {
+    provider: config.provider,
+    endpoint: config.endpoint,
+    access_key_id: config.access_key_id,
+    access_key_secret: config.access_key_secret,
+    bucket: config.bucket,
+    region: config.region,
+  }
+  return btoa(JSON.stringify(coreConfig))
+}
 
 interface StorageConfigState {
   config: OSSConfig | null
@@ -21,6 +35,7 @@ interface StorageConfigState {
   lastConnectionTest: OSSConnectionTest | null
   validationResult: ConfigValidation | null
   error: string | null
+  lastTestedConfigHash: string | null // New: track last tested configuration
 }
 
 const providerTemplates = {
@@ -40,7 +55,7 @@ const providerTemplates = {
     name: "腾讯云 COS",
     icon: Globe,
     regions: ["ap-beijing", "ap-shanghai", "ap-guangzhou", "ap-chengdu"],
-    defaultEndpoint: "https://cos.ap-beijing.myqcloud.com",
+    defaultEndpoint: "cos.myqcloud.com",
   },
   [OSSProvider.Custom]: {
     name: "自定义 S3",
@@ -59,6 +74,7 @@ export function StorageConfig() {
     lastConnectionTest: null,
     validationResult: null,
     error: null,
+    lastTestedConfigHash: null,
   })
 
   const [isEditing, setIsEditing] = useState(false)
@@ -74,6 +90,11 @@ export function StorageConfig() {
     compression_enabled: true,
     compression_quality: 80,
   })
+
+  // Configuration change detection
+  const currentConfigHash = getCoreConfigHash(editConfig)
+  const hasConfigChanged = state.lastTestedConfigHash != null &&
+    state.lastTestedConfigHash !== currentConfigHash
 
   // Load configuration on component mount
   useEffect(() => {
@@ -106,6 +127,10 @@ export function StorageConfig() {
     try {
       setState(prev => ({ ...prev, isValidating: true, error: null }))
 
+      // Prepare save options for force revalidation if config changed
+      const saveOptions: SaveOptions | undefined = hasConfigChanged ?
+        { force_revalidate: true } : undefined
+
       // Validate configuration first
       const validation = await configOperations.validateOSSConfig(editConfig)
       setState(prev => ({ ...prev, validationResult: validation }))
@@ -119,13 +144,14 @@ export function StorageConfig() {
         return
       }
 
-      // Save configuration
-      await configOperations.saveOSSConfig(editConfig)
+      // Save configuration with force revalidation if needed
+      await configOperations.saveOSSConfig(editConfig, saveOptions)
       setState(prev => ({
         ...prev,
         config: editConfig,
         isValidating: false,
-        lastConnectionTest: validation.connection_test || null
+        lastConnectionTest: validation.connection_test || null,
+        lastTestedConfigHash: currentConfigHash // Update the hash after successful save
       }))
       setIsEditing(false)
     } catch (error) {
@@ -145,7 +171,8 @@ export function StorageConfig() {
       setState(prev => ({
         ...prev,
         lastConnectionTest: connectionTest,
-        isTesting: false
+        isTesting: false,
+        lastTestedConfigHash: connectionTest.success ? currentConfigHash : prev.lastTestedConfigHash // Only update hash on successful test
       }))
     } catch (error) {
       const errorMessage = parseTauriError(error).message
@@ -204,19 +231,33 @@ export function StorageConfig() {
     }))
   }
 
-  const getStatusColor = (success?: boolean) => {
+  const getStatusColor = (success?: boolean, configChanged?: boolean) => {
+    if (configChanged) return "text-amber-600"
     if (success === undefined) return "text-gray-500"
     return success ? "text-green-600" : "text-red-600"
   }
 
-  const getStatusIcon = (success?: boolean) => {
+  const getStatusIcon = (success?: boolean, configChanged?: boolean) => {
+    if (configChanged) return AlertTriangle
     if (success === undefined) return TestTube
     return success ? CheckCircle : AlertCircle
   }
 
-  const getStatusText = (success?: boolean) => {
+  const getStatusText = (success?: boolean, configChanged?: boolean) => {
+    if (configChanged) return "配置已变更"
     if (success === undefined) return "未测试"
     return success ? "连接成功" : "连接失败"
+  }
+
+  const getSaveButtonText = (configChanged?: boolean, isValidating?: boolean) => {
+    if (isValidating) return "验证中..."
+    if (configChanged) return "验证并保存"
+    return "保存配置"
+  }
+
+  const getTestButtonStyle = (configChanged?: boolean) => {
+    if (configChanged) return "border-blue-500 bg-blue-50"
+    return ""
   }
 
   if (state.isLoading) {
@@ -303,13 +344,13 @@ export function StorageConfig() {
                 })()}
               </div>
               <div className="flex items-center gap-2">
-                <div className={`flex items-center gap-1 ${getStatusColor(state.lastConnectionTest?.success)}`}>
+                <div className={`flex items-center gap-1 ${getStatusColor(state.lastConnectionTest?.success, hasConfigChanged)}`}>
                   {(() => {
-                    const StatusIcon = getStatusIcon(state.lastConnectionTest?.success)
+                    const StatusIcon = getStatusIcon(state.lastConnectionTest?.success, hasConfigChanged)
                     return <StatusIcon className="h-4 w-4" />
                   })()}
                   <span className="text-sm">
-                    {getStatusText(state.lastConnectionTest?.success)}
+                    {getStatusText(state.lastConnectionTest?.success, hasConfigChanged)}
                   </span>
                 </div>
               </div>
@@ -350,19 +391,6 @@ export function StorageConfig() {
               </div>
 
               <div className="flex items-center gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={handleTestConnection}
-                  disabled={state.isTesting}
-                >
-                  {state.isTesting ? (
-                    <Loader2 className="h-4 w-4 mr-1 animate-spin" />
-                  ) : (
-                    <TestTube className="h-4 w-4 mr-1" />
-                  )}
-                  测试连接
-                </Button>
                 <Button variant="outline" size="sm" onClick={() => setIsEditing(true)}>
                   编辑配置
                 </Button>
@@ -423,10 +451,18 @@ export function StorageConfig() {
                 <Label htmlFor="endpoint">端点地址</Label>
                 <Input
                   id="endpoint"
-                  placeholder="例如：https://oss-cn-hangzhou.aliyuncs.com"
+                  placeholder={editConfig.provider === OSSProvider.Tencent 
+                    ? "例如：cos.myqcloud.com" 
+                    : "例如：https://oss-cn-hangzhou.aliyuncs.com"
+                  }
                   value={editConfig.endpoint}
                   onChange={(e) => setEditConfig(prev => ({ ...prev, endpoint: e.target.value }))}
                 />
+                {editConfig.provider === OSSProvider.Tencent && (
+                  <p className="text-xs text-muted-foreground">
+                    注意：腾讯云COS使用统一域名格式，无需包含https://前缀
+                  </p>
+                )}
               </div>
             </div>
 
@@ -435,20 +471,36 @@ export function StorageConfig() {
                 <Label htmlFor="access-key">访问密钥 (Access Key)</Label>
                 <Input
                   id="access-key"
-                  placeholder="输入访问密钥"
+                  placeholder={editConfig.provider === OSSProvider.Tencent 
+                    ? "输入SecretId" 
+                    : "输入访问密钥"
+                  }
                   value={editConfig.access_key_id}
                   onChange={(e) => setEditConfig(prev => ({ ...prev, access_key_id: e.target.value }))}
                 />
+                {editConfig.provider === OSSProvider.Tencent && (
+                  <p className="text-xs text-muted-foreground">
+                    腾讯云使用SecretId作为访问密钥
+                  </p>
+                )}
               </div>
               <div className="space-y-2">
                 <Label htmlFor="secret-key">私有密钥 (Secret Key)</Label>
                 <Input
                   id="secret-key"
                   type="password"
-                  placeholder="输入私有密钥"
+                  placeholder={editConfig.provider === OSSProvider.Tencent 
+                    ? "输入SecretKey" 
+                    : "输入私有密钥"
+                  }
                   value={editConfig.access_key_secret}
                   onChange={(e) => setEditConfig(prev => ({ ...prev, access_key_secret: e.target.value }))}
                 />
+                {editConfig.provider === OSSProvider.Tencent && (
+                  <p className="text-xs text-muted-foreground">
+                    腾讯云使用SecretKey作为私有密钥
+                  </p>
+                )}
               </div>
             </div>
 
@@ -457,10 +509,18 @@ export function StorageConfig() {
                 <Label htmlFor="bucket">存储桶名称</Label>
                 <Input
                   id="bucket"
-                  placeholder="输入存储桶名称"
+                  placeholder={editConfig.provider === OSSProvider.Tencent 
+                    ? "例如：mybucket-1234567890" 
+                    : "输入存储桶名称"
+                  }
                   value={editConfig.bucket}
                   onChange={(e) => setEditConfig(prev => ({ ...prev, bucket: e.target.value }))}
                 />
+                {editConfig.provider === OSSProvider.Tencent && (
+                  <p className="text-xs text-muted-foreground">
+                    腾讯云COS存储桶格式：存储桶名称-APPID (如：mybucket-1234567890)
+                  </p>
+                )}
               </div>
               <div className="space-y-2">
                 <Label htmlFor="region">区域</Label>
@@ -551,13 +611,14 @@ export function StorageConfig() {
 
             {/* Connection Test Results */}
             {state.lastConnectionTest && (
-              <Alert variant={state.lastConnectionTest.success ? "default" : "destructive"}>
+              <Alert variant={state.lastConnectionTest.success ? "default" : "destructive"} 
+                     className={state.lastConnectionTest.success ? "border-green-200 bg-green-50 text-green-800" : ""}>
                 {state.lastConnectionTest.success ? (
-                  <CheckCircle className="h-4 w-4" />
+                  <CheckCircle className="h-4 w-4 text-green-600" />
                 ) : (
                   <AlertCircle className="h-4 w-4" />
                 )}
-                <AlertDescription>
+                <AlertDescription className={state.lastConnectionTest.success ? "text-green-800" : ""}>
                   {state.lastConnectionTest.success
                     ? `连接测试成功 (延迟: ${state.lastConnectionTest.latency}ms)`
                     : `连接测试失败: ${state.lastConnectionTest.error}`
@@ -569,7 +630,17 @@ export function StorageConfig() {
             <Alert>
               <AlertCircle className="h-4 w-4" />
               <AlertDescription>
-                请确保提供的访问密钥具有对应存储桶的读写权限。配置保存前会自动进行连接测试。
+                {editConfig.provider === OSSProvider.Tencent ? (
+                  <>
+                    腾讯云COS配置说明：
+                    <br />• 存储桶格式：bucket-name-appid（可在腾讯云控制台查看完整格式）
+                    <br />• SecretId/SecretKey：在腾讯云访问管理(CAM)中获取
+                    <br />• 确保密钥具有对应存储桶的读写权限
+                    <br />配置保存前会自动进行连接测试。
+                  </>
+                ) : (
+                  "请确保提供的访问密钥具有对应存储桶的读写权限。配置保存前会自动进行连接测试。"
+                )}
               </AlertDescription>
             </Alert>
 
@@ -581,13 +652,14 @@ export function StorageConfig() {
                 variant="outline"
                 onClick={handleTestConnection}
                 disabled={state.isTesting}
+                className={getTestButtonStyle(hasConfigChanged)}
               >
                 {state.isTesting ? (
                   <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                 ) : (
                   <TestTube className="h-4 w-4 mr-2" />
                 )}
-                测试连接
+                测试连通性
               </Button>
               <Button
                 onClick={handleSaveConfig}
@@ -596,7 +668,7 @@ export function StorageConfig() {
                 {state.isValidating ? (
                   <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                 ) : null}
-                保存配置
+                {getSaveButtonText(hasConfigChanged, state.isValidating)}
               </Button>
             </div>
           </CardContent>

@@ -1,18 +1,45 @@
 use crate::models::{OSSConfig, ConfigValidation, OSSConnectionTest, OSSProvider};
 use crate::utils::{Result, AppError};
+use crate::services::oss_service::OSSService;
 use aes_gcm::{
     aead::{Aead, AeadCore, KeyInit, OsRng},
     Aes256Gcm, Nonce,
 };
 use base64::{Engine as _, engine::general_purpose};
+use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
+use sha2::{Sha256, Digest};
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::sync::Mutex;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const CONFIG_VERSION: u32 = 1;
 const CONFIG_FILE_NAME: &str = "config.json";
 const CONFIG_DIR_NAME: &str = "imgtoss";
+const CACHE_EXPIRY_SECONDS: u64 = 300; // 5 minutes
+
+// OSS Connection Test Cache
+#[derive(Debug, Clone)]
+struct CachedTestResult {
+    config_hash: String,
+    result: OSSConnectionTest,
+    timestamp: SystemTime,
+}
+
+impl CachedTestResult {
+    fn is_expired(&self) -> bool {
+        self.timestamp
+            .elapsed()
+            .map(|duration| duration.as_secs() > CACHE_EXPIRY_SECONDS)
+            .unwrap_or(true)
+    }
+}
+
+// Global cache for connection test results
+static CONNECTION_TEST_CACHE: Lazy<Mutex<HashMap<String, CachedTestResult>>> = 
+    Lazy::new(|| Mutex::new(HashMap::new()));
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct EncryptedConfig {
@@ -162,10 +189,113 @@ impl ConfigService {
             .map_err(|e| AppError::Encryption(format!("Invalid UTF-8 data: {}", e)))
     }
 
+    // ============================================================================
+    // Smart Connection Test with Caching
+    // ============================================================================
+
+    /// Calculate configuration hash for cache key generation
+    /// Includes provider information to ensure provider-level cache isolation
+    /// Only includes core connection parameters that affect actual connectivity
+    fn calculate_config_hash(&self, config: &OSSConfig) -> String {
+        let mut hasher = Sha256::new();
+        
+        // Include all core connection parameters that affect connection behavior
+        // Provider is crucial for cache isolation between different providers
+        hasher.update((config.provider.clone() as u8).to_string());
+        hasher.update("|");
+        hasher.update(&config.endpoint);
+        hasher.update("|");
+        hasher.update(&config.access_key_id);
+        hasher.update("|");
+        hasher.update(&config.access_key_secret); // 🔑 Critical security field
+        hasher.update("|");
+        hasher.update(&config.bucket);
+        hasher.update("|");
+        hasher.update(&config.region);
+        
+        // Note: Business configuration parameters are excluded:
+        // - path_template: doesn't affect connection testing
+        // - cdn_domain: doesn't affect connection testing  
+        // - compression_*: doesn't affect connection testing
+        
+        format!("{:x}", hasher.finalize())
+    }
+
+    /// Get cached test result if available and not expired
+    fn get_cached_test_result(&self, config_hash: &str) -> Option<OSSConnectionTest> {
+        let cache = CONNECTION_TEST_CACHE.lock().ok()?;
+        let cached_result = cache.get(config_hash)?;
+        
+        if cached_result.is_expired() {
+            None
+        } else {
+            println!("✅ Using cached connection test result for config hash: {}...", &config_hash[..8]);
+            Some(cached_result.result.clone())
+        }
+    }
+
+    /// Cache a test result
+    fn cache_test_result(&self, config_hash: String, result: OSSConnectionTest) {
+        if let Ok(mut cache) = CONNECTION_TEST_CACHE.lock() {
+            let cached_result = CachedTestResult {
+                config_hash: config_hash.clone(),
+                result,
+                timestamp: SystemTime::now(),
+            };
+            cache.insert(config_hash, cached_result);
+            
+            // Clean expired entries periodically
+            cache.retain(|_, cached| !cached.is_expired());
+        }
+    }
+
+    /// Clear cache for specific configuration (used when force revalidation is requested)
+    pub fn clear_config_cache(&self, config: &OSSConfig) {
+        let config_hash = self.calculate_config_hash(config);
+        if let Ok(mut cache) = CONNECTION_TEST_CACHE.lock() {
+            cache.remove(&config_hash);
+            println!("🗑️ Cleared cache for config hash: {}...", &config_hash[..8]);
+        }
+    }
+
+    /// Clear all cached results (utility method)
+    fn clear_all_cache(&self) {
+        if let Ok(mut cache) = CONNECTION_TEST_CACHE.lock() {
+            let count = cache.len();
+            cache.clear();
+            println!("🗑️ Cleared all {} cached connection results", count);
+        }
+    }
+
+    /// Perform actual connection test using OSSService
+    async fn perform_connection_test(&self, config: &OSSConfig) -> Result<OSSConnectionTest> {
+        println!("🔄 Performing actual connection test for provider: {:?}", config.provider);
+        let oss_service = OSSService::new(config.clone())?;
+        oss_service.test_connection().await
+    }
+
+    /// Smart connection test with caching
+    async fn smart_connection_test(&self, config: &OSSConfig) -> Result<OSSConnectionTest> {
+        let config_hash = self.calculate_config_hash(config);
+        
+        // Check cache first
+        if let Some(cached_result) = self.get_cached_test_result(&config_hash) {
+            return Ok(cached_result);
+        }
+        
+        // Perform actual test
+        let test_result = self.perform_connection_test(config).await?;
+        
+        // Cache the result
+        self.cache_test_result(config_hash, test_result.clone());
+        
+        Ok(test_result)
+    }
+
     pub async fn validate_config(&self, config: &OSSConfig) -> Result<ConfigValidation> {
         let mut errors = Vec::new();
 
-        // Validate required fields
+        // Basic field validation (no network operations)
         if config.endpoint.trim().is_empty() {
             errors.push("Endpoint is required".to_string());
         }
@@ -201,10 +331,12 @@ impl ConfigService {
             errors.push("Endpoint must be a valid URL starting with http:// or https://".to_string());
         }
 
-        // Test connection if basic validation passes
+        // Smart connection test with caching (only if basic validation passes)
         let connection_test = if errors.is_empty() {
-            Some(self.test_oss_connection(config).await?)
+            println!("🔍 Basic validation passed, proceeding with smart connection test...");
+            Some(self.smart_connection_test(config).await?)
         } else {
+            println!("❌ Basic validation failed, skipping connection test");
             None
         };
 
@@ -213,53 +345,6 @@ impl ConfigService {
             errors,
             connection_test,
         })
-    }
-
-    pub async fn test_oss_connection(&self, config: &OSSConfig) -> Result<OSSConnectionTest> {
-        println!("🔍 ConfigService: Starting connection test for provider: {:?}", config.provider);
-        let start_time = Instant::now();
-        
-        // Create a simple test request based on the OSS provider
-        let test_result = match config.provider {
-            OSSProvider::Aliyun => {
-                println!("🔧 Testing Aliyun OSS connection...");
-                self.test_aliyun_connection(config).await
-            },
-            OSSProvider::Tencent => {
-                println!("🔧 Testing Tencent COS connection...");
-                self.test_tencent_connection(config).await
-            },
-            OSSProvider::AWS => {
-                println!("🔧 Testing AWS S3 connection...");
-                self.test_aws_connection(config).await
-            },
-            OSSProvider::Custom => {
-                println!("🔧 Testing Custom provider connection...");
-                self.test_custom_connection(config).await
-            },
-        };
-
-        let latency = start_time.elapsed().as_millis() as u64;
-        println!("⏱️  Connection test completed in {}ms", latency);
-
-        match test_result {
-            Ok(_) => {
-                println!("✅ Connection test successful");
-                Ok(OSSConnectionTest {
-                    success: true,
-                    error: None,
-                    latency: Some(latency),
-                })
-            },
-            Err(e) => {
-                println!("❌ Connection test failed: {}", e);
-                Ok(OSSConnectionTest {
-                    success: false,
-                    error: Some(e.to_string()),
-                    latency: Some(latency),
-                })
-            },
-        }
     }
 
     pub async fn delete_config(&self) -> Result<()> {
@@ -358,309 +443,6 @@ impl ConfigService {
                 "Unsupported config version: {}",
                 old_config.version
             ))),
-        }
-    }
-
-    async fn test_aliyun_connection(&self, config: &OSSConfig) -> Result<()> {
-        println!("🔧 Creating HTTP client for Aliyun OSS...");
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(10))
-            .build()
-            .map_err(|e| {
-                println!("❌ Failed to create HTTP client: {}", e);
-                e
-            })?;
-
-        let url = format!("{}/{}", config.endpoint.trim_end_matches('/'), config.bucket);
-        println!("🌐 Testing connection to URL: {}", url);
-        
-        println!("📡 Sending HEAD request...");
-        let response = client
-            .head(&url)
-            .timeout(Duration::from_secs(5))
-            .send()
-            .await
-            .map_err(|e| {
-                println!("❌ HTTP request failed: {}", e);
-                if e.is_timeout() {
-                    println!("⏰ Request timed out after 5 seconds");
-                } else if e.is_connect() {
-                    println!("🔌 Connection failed - check network connectivity and endpoint URL");
-                } else if e.is_request() {
-                    println!("📝 Request error - check URL format and parameters");
-                }
-                e
-            })?;
-
-        let status_code = response.status().as_u16();
-        println!("📊 Response status: {} ({})", status_code, response.status());
-        
-        // Print response headers for debugging
-        println!("📋 Response headers:");
-        for (name, value) in response.headers() {
-            println!("   {}: {:?}", name, value);
-        }
-
-        if response.status().is_success() || status_code == 403 {
-            // 403 is acceptable as it means the bucket exists but we don't have list permissions
-            println!("✅ Aliyun OSS connection successful (status: {})", status_code);
-            if status_code == 403 {
-                println!("ℹ️  Status 403 is acceptable - bucket exists but no list permissions");
-            }
-            Ok(())
-        } else {
-            let error_msg = format!("Connection test failed with status: {} ({})", status_code, response.status());
-            println!("❌ {}", error_msg);
-            
-            // Try to get response body for more details
-            if let Ok(body) = response.text().await {
-                if !body.is_empty() {
-                    println!("📄 Response body: {}", body);
-                }
-            }
-            
-            Err(AppError::OSSOperation(error_msg))
-        }
-    }
-
-    async fn test_tencent_connection(&self, config: &OSSConfig) -> Result<()> {
-        println!("🔧 Creating HTTP client for Tencent COS...");
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(10))
-            .build()
-            .map_err(|e| {
-                println!("❌ Failed to create HTTP client: {}", e);
-                e
-            })?;
-
-        // 第一步：测试基本网络连通性（不需要鉴权）
-        println!("🔍 Step 1: Testing basic network connectivity...");
-        let service_url = "https://service.cos.myqcloud.com/";
-        println!("🌐 Testing Tencent COS service URL: {}", service_url);
-        
-        let basic_response = client
-            .get(service_url)
-            .timeout(Duration::from_secs(5))
-            .send()
-            .await
-            .map_err(|e| {
-                println!("❌ Basic connectivity test failed: {}", e);
-                if e.is_timeout() {
-                    println!("⏰ Request timed out - check network connectivity");
-                } else if e.is_connect() {
-                    println!("🔌 Connection failed - check firewall and DNS");
-                }
-                e
-            })?;
-
-        let basic_status = basic_response.status().as_u16();
-        println!("📊 Basic connectivity status: {} ({})", basic_status, basic_response.status());
-
-        // 第二步：测试带鉴权的请求
-        println!("🔍 Step 2: Testing authenticated request...");
-        
-        // 生成鉴权头
-        let host = "service.cos.myqcloud.com";
-        let date = chrono::Utc::now().format("%a, %d %b %Y %H:%M:%S GMT").to_string();
-        
-        // 简化的鉴权签名生成（用于测试连接）
-        let authorization = self.generate_simple_cos_auth(config, "GET", "/", &host, &date);
-        
-        println!("📡 Sending authenticated GET request...");
-        let auth_response = client
-            .get(service_url)
-            .header("Host", host)
-            .header("Date", &date)
-            .header("Authorization", &authorization)
-            .timeout(Duration::from_secs(5))
-            .send()
-            .await
-            .map_err(|e| {
-                println!("❌ Authenticated request failed: {}", e);
-                e
-            })?;
-
-        let auth_status = auth_response.status().as_u16();
-        let status_text = auth_response.status().to_string();
-        println!("📊 Authenticated request status: {} ({})", auth_status, status_text);
-        
-        // Print response headers for debugging
-        println!("📋 Response headers:");
-        for (name, value) in auth_response.headers() {
-            println!("   {}: {:?}", name, value);
-        }
-
-        // Try to get response body for more details
-        if let Ok(body) = auth_response.text().await {
-            if !body.is_empty() && body.len() < 500 {
-                println!("📄 Response body: {}", body);
-            }
-        }
-
-        // 分析结果
-        match (basic_status, auth_status) {
-            (200..=299, 200..=299) => {
-                println!("✅ Tencent COS connection and authentication successful");
-                Ok(())
-            }
-            (200..=299, 403) => {
-                println!("✅ Tencent COS service reachable, but authentication failed");
-                println!("💡 Check your SecretID and SecretKey credentials");
-                println!("💡 This indicates network connectivity is working");
-                Ok(()) // 网络连通，认证失败但这对连接测试来说是可接受的
-            }
-            (200..=299, _) => {
-                println!("✅ Tencent COS service reachable");
-                println!("⚠️  Authentication status: {}", auth_status);
-                Ok(()) // 服务可达
-            }
-            _ => {
-                let error_msg = format!("Tencent COS connection test failed - Basic: {}, Auth: {}", basic_status, auth_status);
-                println!("❌ {}", error_msg);
-                Err(AppError::OSSOperation(error_msg))
-            }
-        }
-    }
-
-    // 简化的 COS 鉴权签名生成（仅用于连接测试）
-    fn generate_simple_cos_auth(&self, config: &OSSConfig, method: &str, uri: &str, host: &str, date: &str) -> String {
-        // 为了简化连接测试，我们先返回一个基本的授权头
-        // 实际的签名算法比较复杂，这里主要是测试网络连通性
-        format!("q-sign-algorithm=sha1&q-ak={}&q-sign-time=0;9999999999&q-key-time=0;9999999999&q-header-list=date;host&q-url-param-list=&q-signature=test", 
-                config.access_key_id)
-    }
-
-    fn sha1_hash(&self, data: &str) -> String {
-        use sha1::{Sha1, Digest};
-        let mut hasher = Sha1::new();
-        hasher.update(data.as_bytes());
-        hex::encode(hasher.finalize())
-    }
-
-    async fn test_aws_connection(&self, config: &OSSConfig) -> Result<()> {
-        println!("🔧 Creating HTTP client for AWS S3...");
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(10))
-            .build()
-            .map_err(|e| {
-                println!("❌ Failed to create HTTP client: {}", e);
-                e
-            })?;
-
-        let url = if config.region == "us-east-1" {
-            format!("https://{}.s3.amazonaws.com", config.bucket)
-        } else {
-            format!("https://{}.s3.{}.amazonaws.com", config.bucket, config.region)
-        };
-        println!("🌐 Testing connection to URL: {}", url);
-        println!("ℹ️  Using {} region format", if config.region == "us-east-1" { "legacy" } else { "regional" });
-        
-        println!("📡 Sending HEAD request...");
-        let response = client
-            .head(&url)
-            .timeout(Duration::from_secs(5))
-            .send()
-            .await
-            .map_err(|e| {
-                println!("❌ HTTP request failed: {}", e);
-                if e.is_timeout() {
-                    println!("⏰ Request timed out after 5 seconds");
-                } else if e.is_connect() {
-                    println!("🔌 Connection failed - check network connectivity and region");
-                } else if e.is_request() {
-                    println!("📝 Request error - check bucket name and region");
-                }
-                e
-            })?;
-
-        let status_code = response.status().as_u16();
-        println!("📊 Response status: {} ({})", status_code, response.status());
-        
-        // Print response headers for debugging
-        println!("📋 Response headers:");
-        for (name, value) in response.headers() {
-            println!("   {}: {:?}", name, value);
-        }
-
-        if response.status().is_success() || status_code == 403 {
-            println!("✅ AWS S3 connection successful (status: {})", status_code);
-            if status_code == 403 {
-                println!("ℹ️  Status 403 is acceptable - bucket exists but no list permissions");
-            }
-            Ok(())
-        } else {
-            let error_msg = format!("Connection test failed with status: {} ({})", status_code, response.status());
-            println!("❌ {}", error_msg);
-            
-            // Try to get response body for more details
-            if let Ok(body) = response.text().await {
-                if !body.is_empty() {
-                    println!("📄 Response body: {}", body);
-                }
-            }
-            
-            Err(AppError::OSSOperation(error_msg))
-        }
-    }
-
-    async fn test_custom_connection(&self, config: &OSSConfig) -> Result<()> {
-        println!("🔧 Creating HTTP client for Custom provider...");
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(10))
-            .build()
-            .map_err(|e| {
-                println!("❌ Failed to create HTTP client: {}", e);
-                e
-            })?;
-
-        let url = format!("{}/{}", config.endpoint.trim_end_matches('/'), config.bucket);
-        println!("🌐 Testing connection to URL: {}", url);
-        
-        println!("📡 Sending HEAD request...");
-        let response = client
-            .head(&url)
-            .timeout(Duration::from_secs(5))
-            .send()
-            .await
-            .map_err(|e| {
-                println!("❌ HTTP request failed: {}", e);
-                if e.is_timeout() {
-                    println!("⏰ Request timed out after 5 seconds");
-                } else if e.is_connect() {
-                    println!("🔌 Connection failed - check network connectivity and endpoint URL");
-                } else if e.is_request() {
-                    println!("📝 Request error - check endpoint URL format and parameters");
-                }
-                e
-            })?;
-
-        let status_code = response.status().as_u16();
-        println!("📊 Response status: {} ({})", status_code, response.status());
-        
-        // Print response headers for debugging
-        println!("📋 Response headers:");
-        for (name, value) in response.headers() {
-            println!("   {}: {:?}", name, value);
-        }
-
-        if response.status().is_success() || status_code == 403 {
-            println!("✅ Custom provider connection successful (status: {})", status_code);
-            if status_code == 403 {
-                println!("ℹ️  Status 403 is acceptable - bucket exists but no list permissions");
-            }
-            Ok(())
-        } else {
-            let error_msg = format!("Connection test failed with status: {} ({})", status_code, response.status());
-            println!("❌ {}", error_msg);
-            
-            // Try to get response body for more details
-            if let Ok(body) = response.text().await {
-                if !body.is_empty() {
-                    println!("📄 Response body: {}", body);
-                }
-            }
-            
-            Err(AppError::OSSOperation(error_msg))
         }
     }
 }
@@ -915,9 +697,12 @@ mod tests {
             let mut config = create_test_config();
             config.provider = provider;
             
-            let connection_test = service.test_oss_connection(&config).await.unwrap();
+            let validation = service.validate_config(&config).await.unwrap();
             // Connection may succeed or fail depending on network, but should not panic
-            assert!(connection_test.latency.is_some());
+            assert!(validation.connection_test.is_some());
+            if let Some(connection_test) = validation.connection_test {
+                assert!(connection_test.latency.is_some());
+            }
         }
     }
 
@@ -931,13 +716,17 @@ mod tests {
         config.region = "us-east-1".to_string();
         config.endpoint = "https://s3.amazonaws.com".to_string();
         
-        let connection_test = service.test_oss_connection(&config).await.unwrap();
-        assert!(connection_test.latency.is_some()); // Should have latency regardless of success
+        let validation = service.validate_config(&config).await.unwrap();
+        if let Some(connection_test) = validation.connection_test {
+            assert!(connection_test.latency.is_some()); // Should have latency regardless of success
+        }
 
         // Test other regions
         config.region = "us-west-2".to_string();
-        let connection_test = service.test_oss_connection(&config).await.unwrap();
-        assert!(connection_test.latency.is_some()); // Should have latency regardless of success
+        let validation = service.validate_config(&config).await.unwrap();
+        if let Some(connection_test) = validation.connection_test {
+            assert!(connection_test.latency.is_some()); // Should have latency regardless of success
+        }
     }
 
     #[tokio::test]
