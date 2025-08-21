@@ -7,7 +7,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 use tokio::fs as async_fs;
-use base64::{Engine as _, engine::general_purpose::STANDARD as base64_engine};
 
 
 pub struct FileService {
@@ -101,21 +100,7 @@ impl FileService {
                 image.last_modified = metadata.modified().unwrap_or(SystemTime::now());
                 
                 println!("Processing image: {}", &image.absolute_path);
-                
-                // Generate thumbnail for existing images
-                match self.image_service.generate_thumbnail(&image.absolute_path, 150).await {
-                    Ok(thumbnail_data) => {
-                        println!("Thumbnail generated successfully, size: {} bytes", thumbnail_data.len());
-                        // Convert thumbnail data to base64 data URL
-                        let base64_thumbnail = base64_engine.encode(&thumbnail_data);
-                        let data_url = format!("data:image/jpeg;base64,{}", base64_thumbnail);
-                        println!("Base64 data URL length: {}", data_url.len());
-                        image.thumbnail = Some(data_url);
-                    }
-                    Err(e) => {
-                        println!("Failed to generate thumbnail for {}: {}", &image.absolute_path, e);
-                    }
-                }
+                // 移除缩略图生成，直接使用原图预览
             } else {
                 image.exists = false;
                 image.size = 0;

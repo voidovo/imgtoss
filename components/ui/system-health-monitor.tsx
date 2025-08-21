@@ -18,6 +18,7 @@ import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import type { SystemHealth, HealthError } from '@/lib/types';
 import { HealthStatus } from '@/lib/types';
+import { formatFileSizeHuman } from '@/lib/utils/format';
 
 interface SystemHealthMonitorProps {
   health: SystemHealth | null;
@@ -50,14 +51,6 @@ const getStatusColor = (status: HealthStatus) => {
     default:
       return 'bg-gray-100 text-gray-800 dark:bg-gray-900 dark:text-gray-200';
   }
-};
-
-const formatBytes = (bytes: number): string => {
-  if (bytes === 0) return '0 B';
-  const k = 1024;
-  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 };
 
 const formatUptime = (seconds: number): string => {
@@ -158,7 +151,7 @@ export function SystemHealthMonitor({
                   Memory Usage
                 </div>
                 <div className="text-xs text-gray-600 dark:text-gray-400">
-                  {formatBytes(health.memory_usage)}
+                  {formatFileSizeHuman(health.memory_usage)}
                 </div>
                 <Progress 
                   value={Math.min((health.memory_usage / 2_000_000_000) * 100, 100)} 
@@ -172,7 +165,7 @@ export function SystemHealthMonitor({
                   Disk Space
                 </div>
                 <div className="text-xs text-gray-600 dark:text-gray-400">
-                  {formatBytes(health.disk_space)} available
+                  {formatFileSizeHuman(health.disk_space)} available
                 </div>
                 <Progress 
                   value={Math.min((health.disk_space / 10_000_000_000) * 100, 100)} 

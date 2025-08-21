@@ -367,10 +367,6 @@ export function StorageConfig() {
                 <p>{state.config.region}</p>
               </div>
               <div>
-                <Label className="text-xs text-muted-foreground">访问密钥</Label>
-                <p className="font-mono">{state.config.access_key_id}</p>
-              </div>
-              <div>
                 <Label className="text-xs text-muted-foreground">路径模板</Label>
                 <p className="font-mono">{state.config.path_template}</p>
               </div>
@@ -657,7 +653,7 @@ export function StorageConfig() {
                 {state.isTesting ? (
                   <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                 ) : (
-                  <TestTube className="h-4 w-4 mr-2" />
+                  <></>
                 )}
                 测试连通性
               </Button>

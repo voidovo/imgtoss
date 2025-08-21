@@ -5,6 +5,8 @@ import { AlertTriangle, Copy, Eye, Clock, FileImage, CheckCircle, X } from "luci
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
+import { FilenameDisplay } from "@/components/ui/filename-display"
+import { formatFileSizeHuman } from "@/lib/utils/format"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { tauriAPI } from "@/lib/tauri-api"
 import type { DuplicateCheckResult, DuplicateInfo } from "@/lib/types"
@@ -26,14 +28,6 @@ export default function DuplicateDetection({
   const [duplicateResults, setDuplicateResults] = useState<DuplicateCheckResult[]>([])
   const [duplicateInfos, setDuplicateInfos] = useState<Map<string, DuplicateInfo>>(new Map())
   const [showDetails, setShowDetails] = useState<Set<string>>(new Set())
-
-  const formatFileSize = (bytes: number) => {
-    if (bytes === 0) return "0 Bytes"
-    const k = 1024
-    const sizes = ["Bytes", "KB", "MB", "GB"]
-    const i = Math.floor(Math.log(bytes) / Math.log(k))
-    return Number.parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i]
-  }
 
   const formatDate = (dateString: string) => {
     return new Date(dateString).toLocaleString()
@@ -190,7 +184,6 @@ export default function DuplicateDetection({
               {duplicates.map((duplicate, index) => {
                 const info = duplicateInfos.get(duplicate.checksum)
                 const imagePath = imagePaths[duplicateResults.indexOf(duplicate)]
-                const fileName = imagePath?.split('/').pop() || imagePath || 'Unknown'
                 
                 return (
                   <div key={duplicate.checksum} className="border rounded-lg p-4">
@@ -198,9 +191,13 @@ export default function DuplicateDetection({
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2">
                           <Badge variant="destructive">重复</Badge>
-                          <span className="font-medium text-gray-900 dark:text-white truncate">
-                            {fileName}
-                          </span>
+                          <div className="font-medium text-gray-900 dark:text-white flex-1 min-w-0">
+                            <FilenameDisplay
+                              filePath={imagePath || 'Unknown'}
+                              maxLength={40}
+                              showTooltip={true}
+                            />
+                          </div>
                         </div>
                         <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
                           校验和: {duplicate.checksum.substring(0, 16)}...
@@ -222,14 +219,19 @@ export default function DuplicateDetection({
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
                           <div>
                             <span className="font-medium">原始路径:</span>
-                            <p className="text-gray-600 dark:text-gray-400 break-all">
-                              {info.original_path}
-                            </p>
+                            <div className="text-gray-600 dark:text-gray-400">
+                              <FilenameDisplay
+                                filePath={info.original_path}
+                                maxLength={50}
+                                showFullPath={true}
+                                showTooltip={true}
+                              />
+                            </div>
                           </div>
                           <div>
                             <span className="font-medium">文件大小:</span>
                             <p className="text-gray-600 dark:text-gray-400">
-                              {formatFileSize(info.file_size)}
+                              {formatFileSizeHuman(info.file_size)}
                             </p>
                           </div>
                           <div>

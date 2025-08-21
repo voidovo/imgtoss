@@ -30,17 +30,10 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { FilenameDisplay } from "@/components/ui/filename-display"
+import { formatFileSizeHuman } from "@/lib/utils/format"
 import { historyOperations } from "@/lib/tauri-api"
 import type { HistoryRecord, PaginatedResult, HistoryStatistics } from "@/lib/types"
-
-// Helper function to format file size
-function formatFileSize(bytes?: number): string {
-  if (!bytes || bytes === 0) return '0 B';
-  const k = 1024;
-  const sizes = ['B', 'KB', 'MB', 'GB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
-}
 
 // Helper function to extract filename from file path
 function extractFilename(filePath: string): string {
@@ -323,7 +316,7 @@ export function HistoryRecords() {
             <HardDrive className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{formatFileSize(statistics?.total_size_uploaded)}</div>
+            <div className="text-2xl font-bold">{formatFileSizeHuman(statistics?.total_size_uploaded || 0)}</div>
             <p className="text-xs text-muted-foreground">累计上传大小</p>
           </CardContent>
         </Card>
@@ -445,9 +438,13 @@ export function HistoryRecords() {
                       <TableCell>{getOperationBadge(item.operation)}</TableCell>
                       <TableCell>
                         <div className="min-w-0 flex-1">
-                          <p className="font-medium truncate">
-                            {item.files.length > 0 ? extractFilename(item.files[0]) : 'No files'}
-                          </p>
+                          <div className="font-medium">
+                            <FilenameDisplay
+                              filePath={item.files.length > 0 ? item.files[0] : 'No files'}
+                              maxLength={30}
+                              showTooltip={true}
+                            />
+                          </div>
                           {item.files.length > 1 && (
                             <p className="text-sm text-muted-foreground">
                               +{item.files.length - 1} 个文件
@@ -456,7 +453,7 @@ export function HistoryRecords() {
                         </div>
                       </TableCell>
                       <TableCell className="font-mono text-sm">{item.image_count}</TableCell>
-                      <TableCell className="font-mono text-sm">{formatFileSize(item.total_size)}</TableCell>
+                      <TableCell className="font-mono text-sm">{formatFileSizeHuman(item.total_size)}</TableCell>
                       <TableCell>
                         <div className="flex items-center gap-2">
                           <Calendar className="h-4 w-4 text-muted-foreground" />
