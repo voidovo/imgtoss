@@ -10,6 +10,7 @@ use crate::services::history_service::{
 };
 use crate::services::{ConfigService, FileService, HistoryService, ImageService, OSSService};
 use crate::utils::error::AppError;
+use crate::{log_debug, log_info, log_error};
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -322,50 +323,156 @@ pub async fn upload_images(
     image_paths: Vec<String>,
     config: OSSConfig,
 ) -> Result<Vec<UploadResult>, String> {
+    log_info!(
+        operation = "upload_images_command",
+        image_count = image_paths.len(),
+        provider = ?config.provider,
+        "Starting upload images command"
+    );
+
     // Rate limiting
     UPLOAD_RATE_LIMITER
         .check_rate_limit("upload_images")
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| {
+            log_error!(
+                operation = "upload_images_command",
+                error = %e,
+                "Rate limit exceeded"
+            );
+            e.to_string()
+        })?;
 
     // Validate input parameters
     if image_paths.is_empty() {
+        log_error!(
+            operation = "upload_images_command",
+            error = "Image paths cannot be empty",
+            "Validation failed"
+        );
         return Err("Image paths cannot be empty".to_string());
     }
 
     if image_paths.len() > 50 {
+        log_error!(
+            operation = "upload_images_command",
+            image_count = image_paths.len(),
+            error = "Too many images selected (max 50)",
+            "Validation failed"
+        );
         return Err("Too many images selected (max 50)".to_string());
     }
 
     // Validate each image path
-    for path in &image_paths {
+    for (index, path) in image_paths.iter().enumerate() {
+        log_debug!(
+            operation = "upload_images_command",
+            path_index = index,
+            path = %path,
+            "Validating image path"
+        );
+        
         if path.is_empty() {
+            log_error!(
+                operation = "upload_images_command",
+                path_index = index,
+                error = "Image path cannot be empty",
+                "Path validation failed"
+            );
             return Err("Image path cannot be empty".to_string());
         }
 
         // Security check: prevent path traversal
         if path.contains("..") || path.contains("~") {
+            log_error!(
+                operation = "upload_images_command",
+                path_index = index,
+                path = %path,
+                error = "Invalid image path detected",
+                "Security validation failed"
+            );
             return Err("Invalid image path detected".to_string());
         }
 
         let path_obj = Path::new(path);
         if !path_obj.exists() {
+            log_error!(
+                operation = "upload_images_command",
+                path_index = index,
+                path = %path,
+                error = "Image file not found",
+                "File validation failed"
+            );
             return Err(format!("Image file not found: {}", path));
         }
 
         if !path_obj.is_file() {
+            log_error!(
+                operation = "upload_images_command",
+                path_index = index,
+                path = %path,
+                error = "Path is not a file",
+                "File validation failed"
+            );
             return Err(format!("Path is not a file: {}", path));
         }
     }
 
-    validate_oss_config_params(&config).map_err(|e| e.to_string())?;
+    // Log OSS configuration details (without sensitive data)
+    log_info!(
+        operation = "upload_images_command",
+        provider = ?config.provider,
+        bucket = %config.bucket,
+        endpoint = %config.endpoint,
+        region = %config.region,
+        path_template = %config.path_template,
+        cdn_domain = ?config.cdn_domain,
+        compression_enabled = config.compression_enabled,
+        compression_quality = config.compression_quality,
+        access_key_id_prefix = %config.access_key_id.chars().take(8).collect::<String>(),
+        "OSS configuration loaded"
+    );
 
-    let oss_service = OSSService::new(config).map_err(|e| e.to_string())?;
+    validate_oss_config_params(&config).map_err(|e| {
+        log_error!(
+            operation = "upload_images_command",
+            error = %e,
+            "OSS configuration validation failed"
+        );
+        e.to_string()
+    })?;
+
+    log_debug!(
+        operation = "upload_images_command",
+        "Creating OSS service with validated configuration"
+    );
+
+    let oss_service = OSSService::new(config).map_err(|e| {
+        log_error!(
+            operation = "upload_images_command",
+            error = %e,
+            "Failed to create OSS service"
+        );
+        e.to_string()
+    })?;
+    
+    log_debug!(
+        operation = "upload_images_command",
+        "OSS service created successfully"
+    );
+    
     let image_service = ImageService::new();
 
     let mut results = Vec::new();
 
     for image_path in image_paths {
         let image_id = uuid::Uuid::new_v4().to_string();
+
+        log_debug!(
+            operation = "upload_images_command",
+            image_path = %image_path,
+            image_id = %image_id,
+            "Processing image for upload"
+        );
 
         // Generate progress callback
         let progress_callback = {
@@ -385,6 +492,15 @@ pub async fn upload_images(
         .await
         {
             Ok((url, checksum)) => {
+                log_info!(
+                    operation = "upload_images_command",
+                    image_path = %image_path,
+                    image_id = %image_id,
+                    uploaded_url = %url,
+                    checksum = %checksum,
+                    "Image uploaded successfully"
+                );
+                
                 results.push(UploadResult {
                     image_id: image_id.clone(),
                     success: true,
@@ -422,6 +538,14 @@ pub async fn upload_images(
                 let _ = PROGRESS_NOTIFIER.remove_progress(&image_id);
             }
             Err(e) => {
+                log_error!(
+                    operation = "upload_images_command",
+                    image_path = %image_path,
+                    image_id = %image_id,
+                    error = %e,
+                    "Image upload failed"
+                );
+                
                 results.push(UploadResult {
                     image_id: image_id.clone(),
                     success: false,
@@ -459,6 +583,14 @@ pub async fn upload_images(
         }
     }
 
+    log_info!(
+        operation = "upload_images_command",
+        total_images = results.len(),
+        successful_uploads = results.iter().filter(|r| r.success).count(),
+        failed_uploads = results.iter().filter(|r| !r.success).count(),
+        "Upload images command completed"
+    );
+
     Ok(results)
 }
 
@@ -473,26 +605,93 @@ async fn upload_single_image(
     use std::fs;
     use std::path::Path;
 
+    log_info!(
+        operation = "upload_single_image",
+        image_path = %image_path,
+        "Starting single image upload process"
+    );
+
     // Calculate checksum first
+    log_debug!(
+        operation = "upload_single_image",
+        image_path = %image_path,
+        "Calculating image checksum"
+    );
     let checksum = image_service.calculate_checksum(image_path).await?;
+    log_debug!(
+        checksum = %checksum,
+        "Image checksum calculated"
+    );
 
     // Read image file
+    log_debug!(
+        operation = "upload_single_image",
+        image_path = %image_path,
+        "Reading image file data"
+    );
     let image_data = fs::read(image_path)
-        .map_err(|e| AppError::FileSystem(format!("Failed to read image file: {}", e)))?;
+        .map_err(|e| {
+            log_error!(
+                operation = "upload_single_image",
+                image_path = %image_path,
+                error = %e,
+                "Failed to read image file"
+            );
+            AppError::FileSystem(format!("Failed to read image file: {}", e))
+        })?;
+    
+    log_debug!(
+        image_size = image_data.len(),
+        "Image file read successfully"
+    );
 
     // Generate object key based on file name and timestamp
     let file_name = Path::new(image_path)
         .file_name()
         .and_then(|name| name.to_str())
-        .ok_or_else(|| AppError::FileSystem("Invalid file name".to_string()))?;
+        .ok_or_else(|| {
+            log_error!(
+                operation = "upload_single_image",
+                image_path = %image_path,
+                "Invalid file name - cannot extract filename from path"
+            );
+            AppError::FileSystem("Invalid file name".to_string())
+        })?;
 
     let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S").to_string();
     let key = format!("images/{}_{}", timestamp, file_name);
+    
+    log_info!(
+        operation = "upload_single_image",
+        image_path = %image_path,
+        object_key = %key,
+        file_size = image_data.len(),
+        checksum = %checksum,
+        "Preparing to upload to OSS"
+    );
 
     // Upload to OSS
     let url = oss_service
         .upload_image(&key, &image_data, progress_callback)
-        .await?;
+        .await
+        .map_err(|e| {
+            log_error!(
+                operation = "upload_single_image",
+                image_path = %image_path,
+                object_key = %key,
+                error = %e,
+                "OSS upload failed"
+            );
+            e
+        })?;
+
+    log_info!(
+        operation = "upload_single_image",
+        image_path = %image_path,
+        object_key = %key,
+        uploaded_url = %url,
+        "Image uploaded successfully"
+    );
 
     Ok((url, checksum))
 }
@@ -946,45 +1145,133 @@ pub async fn import_oss_config(config_json: String) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn replace_markdown_links(replacements: Vec<LinkReplacement>) -> Result<(), String> {
+    log_info!(
+        operation = "replace_markdown_links_command",
+        replacement_count = replacements.len(),
+        "Received request to replace markdown links"
+    );
+
     // Validate input parameters
     if replacements.is_empty() {
+        log_error!(
+            operation = "replace_markdown_links_command",
+            error = "Replacements cannot be empty",
+            "Validation failed"
+        );
         return Err("Replacements cannot be empty".to_string());
     }
 
     if replacements.len() > 1000 {
+        log_error!(
+            operation = "replace_markdown_links_command",
+            replacement_count = replacements.len(),
+            error = "Too many replacements (max 1000)",
+            "Validation failed"
+        );
         return Err("Too many replacements (max 1000)".to_string());
     }
 
     // Validate each replacement
-    for replacement in &replacements {
+    for (index, replacement) in replacements.iter().enumerate() {
+        log_debug!(
+            operation = "validate_replacement",
+            replacement_index = index,
+            file_path = %replacement.file_path,
+            old_link = %replacement.old_link,
+            new_link = %replacement.new_link,
+            line = replacement.line,
+            column = replacement.column,
+            "Validating replacement"
+        );
         if replacement.file_path.is_empty() {
+            log_error!(
+                operation = "replace_markdown_links_command",
+                replacement_index = index,
+                error = "File path cannot be empty in replacement",
+                "Validation failed"
+            );
             return Err("File path cannot be empty in replacement".to_string());
         }
 
         if replacement.old_link.is_empty() {
+            log_error!(
+                operation = "replace_markdown_links_command", 
+                replacement_index = index,
+                error = "Old link cannot be empty in replacement",
+                "Validation failed"
+            );
             return Err("Old link cannot be empty in replacement".to_string());
         }
 
         if replacement.new_link.is_empty() {
+            log_error!(
+                operation = "replace_markdown_links_command",
+                replacement_index = index,
+                error = "New link cannot be empty in replacement", 
+                "Validation failed"
+            );
             return Err("New link cannot be empty in replacement".to_string());
         }
 
         // Security check: prevent path traversal
         if replacement.file_path.contains("..") || replacement.file_path.contains("~") {
+            log_error!(
+                operation = "replace_markdown_links_command",
+                replacement_index = index,
+                file_path = %replacement.file_path,
+                error = "Invalid file path detected in replacement",
+                "Security validation failed"
+            );
             return Err("Invalid file path detected in replacement".to_string());
         }
 
         let path = Path::new(&replacement.file_path);
         if !path.exists() {
+            log_error!(
+                operation = "replace_markdown_links_command",
+                replacement_index = index,
+                file_path = %replacement.file_path,
+                error = "File not found",
+                "File validation failed"
+            );
             return Err(format!("File not found: {}", replacement.file_path));
         }
     }
 
-    let file_service = FileService::new().map_err(|e| e.to_string())?;
-    let _result = file_service
+    log_info!(
+        operation = "replace_markdown_links_command",
+        replacement_count = replacements.len(),
+        "All replacements validated successfully, proceeding with file service"
+    );
+
+    let file_service = FileService::new().map_err(|e| {
+        log_error!(
+            operation = "replace_markdown_links_command",
+            error = %e,
+            "Failed to create FileService"
+        );
+        e.to_string()
+    })?;
+    
+    let result = file_service
         .replace_image_links_batch(replacements)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| {
+            log_error!(
+                operation = "replace_markdown_links_command",
+                error = %e,
+                "FileService batch replacement failed"
+            );
+            e.to_string()
+        })?;
+    
+    log_info!(
+        operation = "replace_markdown_links_command",
+        successful_replacements = result.total_successful_replacements,
+        failed_replacements = result.total_failed_replacements,
+        total_files = result.total_files,
+        "Link replacement completed"
+    );
 
     Ok(())
 }

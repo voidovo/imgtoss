@@ -2,6 +2,7 @@ use crate::models::{ScanResult, ImageReference, LinkReplacement, BackupInfo, Sca
                    ReplacementResult, ReplacementError, BatchReplacementResult, RollbackResult, RollbackError};
 use crate::services::ImageService;
 use crate::utils::{Result, AppError};
+use crate::{log_debug, log_info, log_error, log_warn, log_timing};
 use regex::Regex;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -209,20 +210,53 @@ impl FileService {
 
     /// Replace image links in a markdown file
     pub async fn replace_image_links(&self, file_path: &str, replacements: Vec<LinkReplacement>) -> Result<ReplacementResult> {
+        log_info!(
+            operation = "replace_image_links",
+            file_path = %file_path,
+            replacement_count = replacements.len(),
+            "Starting image link replacement for file"
+        );
+
         // Validate file exists
         let path = Path::new(file_path);
         if !path.exists() {
+            log_error!(
+                operation = "replace_image_links",
+                file_path = %file_path,
+                "File not found"
+            );
             return Err(AppError::FileSystem(format!("File not found: {}", file_path)));
         }
 
+        log_debug!(
+            operation = "replace_image_links",
+            file_path = %file_path,
+            "File exists, creating backup"
+        );
+
         // Create backup before making changes
         let backup_info = self.backup_file(file_path).await?;
+
+        log_debug!(
+            operation = "replace_image_links", 
+            file_path = %file_path,
+            backup_path = %backup_info.backup_path,
+            "Backup created successfully"
+        );
 
         // Read file content
         let content = async_fs::read_to_string(file_path).await?;
         let lines: Vec<&str> = content.lines().collect();
         let mut modified_lines = lines.iter().map(|&s| s.to_string()).collect::<Vec<String>>();
         
+        log_debug!(
+            operation = "replace_image_links",
+            file_path = %file_path,
+            total_lines = lines.len(),
+            content_length = content.len(),
+            "File content loaded"
+        );
+
         let mut successful_replacements = 0;
         let mut failed_replacements = Vec::new();
         
@@ -231,6 +265,14 @@ impl FileService {
             .iter()
             .filter(|r| r.file_path == file_path)
             .collect();
+
+        log_debug!(
+            operation = "replace_image_links",
+            file_path = %file_path,
+            filtered_replacements = file_replacements.len(),
+            original_replacements = replacements.len(),
+            "Filtered replacements for current file"
+        );
 
         // Sort replacements by line number (descending) and column (descending) 
         // to avoid offset issues when replacing multiple items on the same line
@@ -242,11 +284,37 @@ impl FileService {
             }
         });
 
-        for replacement in sorted_replacements {
+        log_debug!(
+            operation = "replace_image_links",
+            file_path = %file_path,
+            "Replacements sorted by line and column (descending)"
+        );
+
+        for (replacement_index, replacement) in sorted_replacements.iter().enumerate() {
+            log_debug!(
+                operation = "process_replacement",
+                replacement_index = replacement_index,
+                file_path = %file_path,
+                line = replacement.line,
+                column = replacement.column,
+                old_link = %replacement.old_link,
+                new_link = %replacement.new_link,
+                "Processing individual replacement"
+            );
+
             // Validate line number
             if replacement.line == 0 || replacement.line > modified_lines.len() {
+                log_warn!(
+                    operation = "replacement_validation_failed",
+                    file_path = %file_path,
+                    line = replacement.line,
+                    total_lines = modified_lines.len(),
+                    error = "Invalid line number",
+                    "Line number validation failed"
+                );
+
                 failed_replacements.push(ReplacementError {
-                    replacement: replacement.clone(),
+                    replacement: (*replacement).clone(),
                     error: format!("Invalid line number: {}", replacement.line),
                 });
                 continue;
@@ -255,18 +323,55 @@ impl FileService {
             let line_index = replacement.line - 1; // Convert to 0-based index
             let line = &modified_lines[line_index];
 
+            log_debug!(
+                operation = "process_replacement",
+                file_path = %file_path,
+                line_index = line_index,
+                line_content = %line,
+                "Retrieved line content"
+            );
+
             // Find the old link in the line
             if let Some(start_pos) = line.find(&replacement.old_link) {
+                log_debug!(
+                    operation = "find_old_link",
+                    file_path = %file_path,
+                    old_link = %replacement.old_link,
+                    found_position = start_pos,
+                    expected_column = replacement.column,
+                    "Found old link in line"
+                );
+
                 // Verify the position matches approximately (allow some tolerance for column differences)
                 let expected_pos = replacement.column.saturating_sub(1); // Convert to 0-based
                 if start_pos.abs_diff(expected_pos) <= 5 { // Allow 5 character tolerance
                     // Replace the old link with the new link
                     let new_line = line.replace(&replacement.old_link, &replacement.new_link);
-                    modified_lines[line_index] = new_line;
+                    modified_lines[line_index] = new_line.clone();
                     successful_replacements += 1;
+
+                    log_info!(
+                        operation = "replacement_success",
+                        file_path = %file_path,
+                        line = replacement.line,
+                        old_link = %replacement.old_link,
+                        new_link = %replacement.new_link,
+                        new_line = %new_line,
+                        "Successfully replaced link"
+                    );
                 } else {
+                    log_warn!(
+                        operation = "replacement_position_mismatch",
+                        file_path = %file_path,
+                        line = replacement.line,
+                        expected_position = replacement.column,
+                        found_position = start_pos + 1,
+                        old_link = %replacement.old_link,
+                        "Link position mismatch"
+                    );
+
                     failed_replacements.push(ReplacementError {
-                        replacement: replacement.clone(),
+                        replacement: (*replacement).clone(),
                         error: format!(
                             "Link position mismatch. Expected around column {}, found at {}",
                             replacement.column, start_pos + 1
@@ -274,8 +379,17 @@ impl FileService {
                     });
                 }
             } else {
+                log_error!(
+                    operation = "replacement_link_not_found",
+                    file_path = %file_path,
+                    line = replacement.line,
+                    line_content = %line,
+                    old_link = %replacement.old_link,
+                    "Old link not found in line"
+                );
+
                 failed_replacements.push(ReplacementError {
-                    replacement: replacement.clone(),
+                    replacement: (*replacement).clone(),
                     error: format!("Old link not found in line: '{}'", replacement.old_link),
                 });
             }
@@ -297,15 +411,38 @@ impl FileService {
 
     /// Replace image links in multiple markdown files (batch operation)
     pub async fn replace_image_links_batch(&self, replacements: Vec<LinkReplacement>) -> Result<BatchReplacementResult> {
+        log_info!(
+            operation = "replace_image_links_batch",
+            replacement_count = replacements.len(),
+            "Starting batch image link replacement"
+        );
+
         let start_time = std::time::Instant::now();
         
         // Group replacements by file path
         let mut file_groups: std::collections::HashMap<String, Vec<LinkReplacement>> = std::collections::HashMap::new();
-        for replacement in replacements {
+        for (index, replacement) in replacements.into_iter().enumerate() {
+            log_debug!(
+                operation = "group_replacements",
+                replacement_index = index,
+                file_path = %replacement.file_path,
+                old_link = %replacement.old_link,
+                new_link = %replacement.new_link,
+                line = replacement.line,
+                column = replacement.column,
+                "Processing replacement"
+            );
+            
             file_groups.entry(replacement.file_path.clone())
                 .or_insert_with(Vec::new)
                 .push(replacement);
         }
+
+        log_info!(
+            operation = "replace_image_links_batch",
+            total_files = file_groups.len(),
+            "Grouped replacements by file"
+        );
 
         let mut results = Vec::new();
         let mut total_successful = 0;
@@ -313,14 +450,37 @@ impl FileService {
 
         let total_files = file_groups.len();
         
-        for (file_path, file_replacements) in file_groups {
+        for (file_index, (file_path, file_replacements)) in file_groups.into_iter().enumerate() {
+            log_info!(
+                operation = "process_file",
+                file_index = file_index,
+                file_path = %file_path,
+                replacement_count = file_replacements.len(),
+                "Processing file replacements"
+            );
+
             match self.replace_image_links(&file_path, file_replacements).await {
                 Ok(result) => {
+                    log_info!(
+                        operation = "file_replacement_success",
+                        file_path = %file_path,
+                        successful_replacements = result.successful_replacements,
+                        failed_replacements = result.failed_replacements.len(),
+                        total_replacements = result.total_replacements,
+                        "File replacement completed successfully"
+                    );
+                    
                     total_successful += result.successful_replacements;
                     total_failed += result.failed_replacements.len();
                     results.push(result);
                 }
                 Err(e) => {
+                    log_error!(
+                        operation = "file_replacement_error",
+                        file_path = %file_path,
+                        error = %e,
+                        "Failed to process file replacements"
+                    );
                     // Create a failed result for the entire file
                     let failed_result = ReplacementResult {
                         file_path: file_path.clone(),
