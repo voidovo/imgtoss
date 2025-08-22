@@ -4,9 +4,14 @@ mod services;
 mod utils;
 
 use commands::*;
+use utils::init_logger;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Initialize logger
+    if let Err(e) = init_logger(None) {
+        eprintln!("Failed to initialize logger: {}", e);
+    }
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())

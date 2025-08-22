@@ -1,5 +1,6 @@
 use crate::models::{OSSConfig, OSSProvider, UploadResult, OSSConnectionTest, UploadProgress};
 use crate::utils::Result;
+use crate::{log_debug, log_info, log_error, log_warn, log_timing};
 use async_trait::async_trait;
 use reqwest::Client;
 use std::collections::HashMap;
@@ -62,75 +63,171 @@ impl AliyunOSS {
 #[async_trait]
 impl OSSProviderTrait for AliyunOSS {
     async fn test_connection(&self) -> Result<OSSConnectionTest> {
-        println!("🔧 AliyunOSS: Starting authenticated connection test...");
+        log_info!(
+            operation = "test_oss_connection",
+            provider = "aliyun",
+            bucket = %self.config.bucket,
+            endpoint = %self.config.endpoint,
+            "Starting OSS connection test"
+        );
+        
         let url = format!("https://{}.{}/", self.config.bucket, self.config.endpoint);
-        println!("🌐 AliyunOSS: Testing URL: {}", url);
+        log_debug!(
+            test_url = %url,
+            "Testing OSS connection URL"
+        );
         
-        let start_time = Instant::now();
-        let date = chrono::Utc::now().format("%a, %d %b %Y %H:%M:%S GMT").to_string();
-        println!("📅 AliyunOSS: Using date: {}", date);
-        
-        let mut headers = HashMap::new();
-        headers.insert("Date".to_string(), date.clone());
-        
-        let resource = format!("/{}/", self.config.bucket);
-        println!("📝 AliyunOSS: Resource path: {}", resource);
-        
-        let authorization = self.get_authorization("HEAD", &resource, &headers);
-        println!("🔐 AliyunOSS: Authorization header generated");
-
-        println!("📡 AliyunOSS: Sending authenticated HEAD request...");
-        let response = self.client
-            .head(&url)
-            .header("Date", date)
-            .header("Authorization", authorization)
-            .send()
-            .await
-            .map_err(|e| {
-                println!("❌ AliyunOSS: HTTP request failed: {}", e);
-                e
-            })?;
-
-        let status_code = response.status().as_u16();
-        let latency = start_time.elapsed().as_millis() as u64;
-        println!("📊 AliyunOSS: Response status: {} ({})", status_code, response.status());
-
-        if response.status().is_success() {
-            println!("✅ AliyunOSS: Authenticated connection test successful in {}ms", latency);
-            Ok(OSSConnectionTest {
-                success: true,
-                error: None,
-                latency: Some(latency),
-            })
-        } else {
-            let error_msg = format!("AliyunOSS connection test failed with status: {}", response.status());
-            println!("❌ {}", error_msg);
+        let result = log_timing!({
+            let date = chrono::Utc::now().format("%a, %d %b %Y %H:%M:%S GMT").to_string();
+            log_debug!(
+                date = %date,
+                "Generated request date"
+            );
             
-            // Try to get response body for more details
-            if let Ok(body) = response.text().await {
-                if !body.is_empty() {
-                    println!("📄 AliyunOSS: Response body: {}", body);
+            let mut headers = HashMap::new();
+            headers.insert("Date".to_string(), date.clone());
+        
+            let resource = format!("/{}/", self.config.bucket);
+            log_debug!(
+                resource = %resource,
+                "Generated resource path"
+            );
+            
+            let authorization = self.get_authorization("HEAD", &resource, &headers);
+            log_debug!("Authorization header generated");
+
+            log_debug!("Sending authenticated HEAD request");
+            let response = self.client
+                .head(&url)
+                .header("Date", date)
+                .header("Authorization", authorization)
+                .send()
+                .await
+                .map_err(|e| {
+                    log_error!(
+                        error = %e,
+                        operation = "oss_head_request",
+                        "HTTP request failed during connection test"
+                    );
+                    e
+                })?;
+
+            let status_code = response.status().as_u16();
+            log_debug!(
+                status_code = status_code,
+                status_text = %response.status(),
+                "Received response"
+            );
+
+            if response.status().is_success() {
+                log_info!(
+                    operation = "test_oss_connection",
+                    provider = "aliyun",
+                    success = true,
+                    "OSS connection test successful"
+                );
+                Ok(OSSConnectionTest {
+                    success: true,
+                    error: None,
+                    latency: Some(0), // Will be calculated by log_timing
+                })
+            } else {
+                let error_msg = format!("OSS connection test failed with status: {}", response.status());
+                
+                // Try to get response body for more details
+                let error_body = response.text().await.unwrap_or_default();
+                if !error_body.is_empty() {
+                    log_debug!(
+                        response_body = %error_body,
+                        "Error response body"
+                    );
                 }
+
+                log_error!(
+                    operation = "test_oss_connection",
+                    provider = "aliyun",
+                    success = false,
+                    status_code = status_code,
+                    error = %error_msg,
+                    "OSS connection test failed"
+                );
+
+                Ok(OSSConnectionTest {
+                    success: false,
+                    error: Some(error_msg),
+                    latency: Some(0), // Will be calculated by log_timing
+                })
             }
-            
-            Ok(OSSConnectionTest {
-                success: false,
-                error: Some(error_msg),
-                latency: Some(latency),
-            })
-        }
+        }, "test_oss_connection");
+
+        result
     }
 
     async fn upload(&self, key: &str, data: &[u8], content_type: &str, progress_callback: Option<&ProgressCallback>) -> Result<String> {
+        log_info!(
+            operation = "aliyun_oss_upload",
+            key = %key,
+            bucket = %self.config.bucket,
+            endpoint = %self.config.endpoint,
+            region = %self.config.region,
+            content_type = %content_type,
+            data_size = data.len(),
+            "Starting Aliyun OSS upload operation"
+        );
+        
+        // Validate bucket name format
+        if self.config.bucket.is_empty() {
+            log_error!(
+                operation = "aliyun_oss_upload",
+                error = "Bucket name is empty",
+                "Upload validation failed"
+            );
+            return Err(crate::utils::AppError::Configuration("Bucket name cannot be empty".to_string()));
+        }
+        
+        // Check for common bucket name issues
+        if self.config.bucket.contains(" ") {
+            log_error!(
+                operation = "aliyun_oss_upload",
+                bucket = %self.config.bucket,
+                error = "Bucket name contains spaces",
+                "Upload validation failed"
+            );
+            return Err(crate::utils::AppError::Configuration("Bucket name cannot contain spaces".to_string()));
+        }
+        
+        if self.config.bucket.contains("_") {
+            log_warn!(
+                operation = "aliyun_oss_upload",
+                bucket = %self.config.bucket,
+                "Bucket name contains underscores, which may not be valid for some OSS providers"
+            );
+        }
+        
         let url = format!("https://{}.{}/{}", self.config.bucket, self.config.endpoint, key);
+        log_debug!(
+            upload_url = %url,
+            "Generated upload URL"
+        );
+        
         let date = chrono::Utc::now().format("%a, %d %b %Y %H:%M:%S GMT").to_string();
+        log_debug!(
+            date = %date,
+            "Generated request date"
+        );
         
         let mut headers = HashMap::new();
         headers.insert("Date".to_string(), date.clone());
         headers.insert("Content-Type".to_string(), content_type.to_string());
         
         let resource = format!("/{}/{}", self.config.bucket, key);
+        log_debug!(
+            resource = %resource,
+            "Generated resource path for signing"
+        );
+        
         let authorization = self.get_authorization("PUT", &resource, &headers);
+        log_debug!("Authorization header generated successfully");
 
         if let Some(callback) = progress_callback {
             callback(UploadProgress {
@@ -142,30 +239,104 @@ impl OSSProviderTrait for AliyunOSS {
             });
         }
 
-        let response = self.client
-            .put(&url)
-            .header("Date", date)
-            .header("Authorization", authorization)
-            .header("Content-Type", content_type)
-            .body(data.to_vec())
-            .send()
-            .await?;
+        log_debug!(
+            method = "PUT",
+            url = %url,
+            content_type = %content_type,
+            data_size = data.len(),
+            "Sending HTTP PUT request"
+        );
 
-        if response.status().is_success() {
-            if let Some(callback) = progress_callback {
-                callback(UploadProgress {
-                    image_id: key.to_string(),
-                    progress: 100.0,
-                    bytes_uploaded: data.len() as u64,
-                    total_bytes: data.len() as u64,
-                    speed: None,
-                });
+        let result = log_timing!({
+            let response = self.client
+                .put(&url)
+                .header("Date", date)
+                .header("Authorization", authorization)
+                .header("Content-Type", content_type)
+                .body(data.to_vec())
+                .send()
+                .await
+                .map_err(|e| {
+                    log_error!(
+                        operation = "aliyun_oss_upload",
+                        error = %e,
+                        url = %url,
+                        "HTTP request failed"
+                    );
+                    e
+                })?;
+
+            let status_code = response.status().as_u16();
+            log_debug!(
+                status_code = status_code,
+                status_text = %response.status(),
+                "Received HTTP response"
+            );
+
+            if response.status().is_success() {
+                log_info!(
+                    operation = "aliyun_oss_upload",
+                    key = %key,
+                    bucket = %self.config.bucket,
+                    status_code = status_code,
+                    success = true,
+                    "Upload completed successfully"
+                );
+                
+                if let Some(callback) = progress_callback {
+                    callback(UploadProgress {
+                        image_id: key.to_string(),
+                        progress: 100.0,
+                        bytes_uploaded: data.len() as u64,
+                        total_bytes: data.len() as u64,
+                        speed: None,
+                    });
+                }
+                Ok(self.get_object_url(key))
+            } else {
+                let status_text = response.status().to_string();
+                let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+                
+                log_error!(
+                    operation = "aliyun_oss_upload",
+                    key = %key,
+                    bucket = %self.config.bucket,
+                    endpoint = %self.config.endpoint,
+                    status_code = status_code,
+                    status_text = %status_text,
+                    error_response = %error_text,
+                    success = false,
+                    "Upload failed with error response"
+                );
+                
+                // Parse XML error for more specific logging
+                if error_text.contains("InvalidBucketName") {
+                    log_error!(
+                        operation = "aliyun_oss_upload",
+                        bucket = %self.config.bucket,
+                        error_type = "InvalidBucketName",
+                        "Bucket name validation failed on server side - check bucket name format and existence"
+                    );
+                } else if error_text.contains("NoSuchBucket") {
+                    log_error!(
+                        operation = "aliyun_oss_upload",
+                        bucket = %self.config.bucket,
+                        error_type = "NoSuchBucket",
+                        "Bucket does not exist - check bucket name and region"
+                    );
+                } else if error_text.contains("AccessDenied") {
+                    log_error!(
+                        operation = "aliyun_oss_upload",
+                        error_type = "AccessDenied",
+                        "Access denied - check credentials and permissions"
+                    );
+                }
+                
+                Err(crate::utils::AppError::OSSOperation(format!("Upload failed: {}", error_text)))
             }
-            Ok(self.get_object_url(key))
-        } else {
-            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
-            Err(crate::utils::AppError::OSSOperation(format!("Upload failed: {}", error_text)))
-        }
+        }, "aliyun_oss_upload");
+
+        result
     }
 
     fn get_object_url(&self, key: &str) -> String {
@@ -362,8 +533,25 @@ impl OSSProviderTrait for TencentCOS {
     }
 
     async fn upload(&self, key: &str, data: &[u8], content_type: &str, progress_callback: Option<&ProgressCallback>) -> Result<String> {
+        log_info!(
+            operation = "tencent_cos_upload",
+            key = %key,
+            bucket = %self.config.bucket,
+            endpoint = %self.config.endpoint,
+            region = %self.config.region,
+            content_type = %content_type,
+            data_size = data.len(),
+            "Starting Tencent COS upload operation"
+        );
+        
         // 验证bucket格式包含APPID（格式：bucketname-appid）
         if !self.config.bucket.contains('-') {
+            log_error!(
+                operation = "tencent_cos_upload",
+                bucket = %self.config.bucket,
+                error = "Bucket format validation failed",
+                "Tencent COS bucket format should be: bucketname-appid"
+            );
             return Err(crate::utils::AppError::Configuration(
                 "腾讯云COS bucket格式错误，应为：bucket-name-appid".to_string()
             ));
@@ -371,6 +559,10 @@ impl OSSProviderTrait for TencentCOS {
         
         let url = format!("https://{}.cos.{}.myqcloud.com/{}", 
                          self.config.bucket, self.config.region, key);
+        log_debug!(
+            upload_url = %url,
+            "Generated Tencent COS upload URL"
+        );
         
         if let Some(callback) = progress_callback {
             callback(UploadProgress {
@@ -387,11 +579,23 @@ impl OSSProviderTrait for TencentCOS {
         let date = chrono::Utc::now().format("%a, %d %b %Y %H:%M:%S GMT").to_string();
         let content_length = data.len().to_string();
         
+        log_debug!(
+            host = %host,
+            date = %date,
+            content_length = %content_length,
+            "Generated request headers"
+        );
+        
         // 计算Content-MD5（可选但推荐）
         let mut hasher = md5::Context::new();
         hasher.consume(data);
         let digest = hasher.compute();
         let md5_hash = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &digest.0);
+        
+        log_debug!(
+            content_md5_hash = %md5_hash,
+            "Calculated Content-MD5"
+        );
         
         let mut headers = HashMap::new();
         headers.insert("host".to_string(), host.clone());
@@ -403,36 +607,116 @@ impl OSSProviderTrait for TencentCOS {
         let params = HashMap::new();
         let uri = format!("/{}", key);
         
+        log_debug!(
+            uri = %uri,
+            "Generated URI for signing"
+        );
+        
         // 生成授权签名
         let authorization = self.get_authorization("PUT", &uri, &headers, &params);
+        log_debug!("Tencent COS authorization header generated successfully");
 
-        let response = self.client
-            .put(&url)
-            .header("Host", &host)
-            .header("Date", &date)
-            .header("Content-Type", content_type)
-            .header("Content-Length", &content_length)
-            .header("Content-MD5", &md5_hash)
-            .header("Authorization", &authorization)
-            .body(data.to_vec())
-            .send()
-            .await?;
+        log_debug!(
+            method = "PUT",
+            url = %url,
+            content_type = %content_type,
+            data_size = data.len(),
+            "Sending HTTP PUT request to Tencent COS"
+        );
 
-        if response.status().is_success() {
-            if let Some(callback) = progress_callback {
-                callback(UploadProgress {
-                    image_id: key.to_string(),
-                    progress: 100.0,
-                    bytes_uploaded: data.len() as u64,
-                    total_bytes: data.len() as u64,
-                    speed: None,
-                });
+        let result = log_timing!({
+            let response = self.client
+                .put(&url)
+                .header("Host", &host)
+                .header("Date", &date)
+                .header("Content-Type", content_type)
+                .header("Content-Length", &content_length)
+                .header("Content-MD5", &md5_hash)
+                .header("Authorization", &authorization)
+                .body(data.to_vec())
+                .send()
+                .await
+                .map_err(|e| {
+                    log_error!(
+                        operation = "tencent_cos_upload",
+                        error = %e,
+                        url = %url,
+                        "HTTP request failed"
+                    );
+                    e
+                })?;
+
+            let status_code = response.status().as_u16();
+            log_debug!(
+                status_code = status_code,
+                status_text = %response.status(),
+                "Received HTTP response from Tencent COS"
+            );
+
+            if response.status().is_success() {
+                log_info!(
+                    operation = "tencent_cos_upload",
+                    key = %key,
+                    bucket = %self.config.bucket,
+                    status_code = status_code,
+                    success = true,
+                    "Upload completed successfully"
+                );
+                
+                if let Some(callback) = progress_callback {
+                    callback(UploadProgress {
+                        image_id: key.to_string(),
+                        progress: 100.0,
+                        bytes_uploaded: data.len() as u64,
+                        total_bytes: data.len() as u64,
+                        speed: None,
+                    });
+                }
+                Ok(self.get_object_url(key))
+            } else {
+                let status_text = response.status().to_string();
+                let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+                
+                log_error!(
+                    operation = "tencent_cos_upload",
+                    key = %key,
+                    bucket = %self.config.bucket,
+                    endpoint = %self.config.endpoint,
+                    status_code = status_code,
+                    status_text = %status_text,
+                    error_response = %error_text,
+                    success = false,
+                    "Upload failed with error response"
+                );
+                
+                // Parse specific error types for Tencent COS
+                if error_text.contains("NoSuchBucket") || error_text.contains("BucketNotExists") {
+                    log_error!(
+                        operation = "tencent_cos_upload",
+                        bucket = %self.config.bucket,
+                        error_type = "NoSuchBucket",
+                        "Bucket does not exist - check bucket name format (should be bucketname-appid) and region"
+                    );
+                } else if error_text.contains("InvalidBucketName") {
+                    log_error!(
+                        operation = "tencent_cos_upload",
+                        bucket = %self.config.bucket,
+                        error_type = "InvalidBucketName",
+                        "Invalid bucket name format - should be bucketname-appid"
+                    );
+                } else if error_text.contains("AccessDenied") || error_text.contains("SignatureDoesNotMatch") {
+                    log_error!(
+                        operation = "tencent_cos_upload",
+                        error_type = "AccessDenied",
+                        "Access denied - check SecretID, SecretKey and bucket permissions"
+                    );
+                }
+                
+                Err(crate::utils::AppError::OSSOperation(format!("Upload failed: {}", error_text)))
             }
-            Ok(self.get_object_url(key))
-        } else {
-            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
-            Err(crate::utils::AppError::OSSOperation(format!("Upload failed: {}", error_text)))
-        }
+        }, "tencent_cos_upload");
+
+        result
     }
 
     fn get_object_url(&self, key: &str) -> String {
@@ -719,11 +1003,30 @@ pub struct OSSService {
 
 impl OSSService {
     pub fn new(config: OSSConfig) -> Result<Self> {
+        log_info!(
+            operation = "oss_service_new",
+            provider = ?config.provider,
+            bucket = %config.bucket,
+            endpoint = %config.endpoint,
+            region = %config.region,
+            "Creating OSS service with provider configuration"
+        );
+        
         let provider: Box<dyn OSSProviderTrait> = match config.provider {
-            OSSProvider::Aliyun => Box::new(AliyunOSS::new(config)),
-            OSSProvider::Tencent => Box::new(TencentCOS::new(config)),
-            OSSProvider::AWS => Box::new(AWSS3::new(config)),
+            OSSProvider::Aliyun => {
+                log_info!("Creating Aliyun OSS provider");
+                Box::new(AliyunOSS::new(config))
+            },
+            OSSProvider::Tencent => {
+                log_info!("Creating Tencent COS provider");
+                Box::new(TencentCOS::new(config))
+            },
+            OSSProvider::AWS => {
+                log_info!("Creating AWS S3 provider");
+                Box::new(AWSS3::new(config))
+            },
             OSSProvider::Custom => {
+                log_error!("Custom provider not implemented");
                 return Err(crate::utils::AppError::Configuration("Custom provider not implemented".to_string()));
             }
         };
@@ -732,7 +1035,19 @@ impl OSSService {
     }
 
     pub async fn upload_image(&self, key: &str, data: &[u8], progress_callback: Option<ProgressCallback>) -> Result<String> {
+        log_debug!(
+            operation = "oss_service_upload_image",
+            key = %key,
+            data_size = data.len(),
+            "Delegating upload to provider implementation"
+        );
+        
         let content_type = self.detect_content_type(data);
+        log_debug!(
+            detected_content_type = %content_type,
+            "Content type detected"
+        );
+        
         self.provider.upload(key, data, &content_type, progress_callback.as_ref()).await
     }
 

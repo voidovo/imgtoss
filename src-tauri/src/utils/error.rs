@@ -32,6 +32,9 @@ pub enum AppError {
     #[error("Validation error: {0}")]
     Validation(String),
     
+    #[error("Invalid input: {0}")]
+    InvalidInput(String),
+    
     #[error("Security error: {0}")]
     Security(String),
     

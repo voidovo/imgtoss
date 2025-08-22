@@ -1,5 +1,6 @@
 use crate::models::ImageInfo;
 use crate::utils::{AppError, Result};
+use crate::{log_debug, log_info, log_error, log_timing, log_operation};
 use image::{
     imageops::FilterType, DynamicImage, GenericImageView, ImageBuffer, ImageFormat, ImageReader,
     Rgb,
@@ -27,82 +28,164 @@ impl ImageService {
     /// # Returns
     /// * `Result<Vec<u8>>` - JPEG encoded thumbnail data
     pub async fn generate_thumbnail(&self, image_path: &str, size: u32) -> Result<Vec<u8>> {
-        let image_path = image_path.to_string();
+        log_info!(
+            operation = "generate_thumbnail",
+            image_path = image_path,
+            thumbnail_size = size,
+            "Starting thumbnail generation"
+        );
 
-        task::spawn_blocking(move || {
-            // Load the image
-            let img = ImageReader::open(&image_path)
-                .map_err(|e| {
-                    AppError::ImageProcessing(format!("Failed to open image {}: {}", image_path, e))
-                })?
-                .decode()
-                .map_err(|e| {
-                    AppError::ImageProcessing(format!(
-                        "Failed to decode image {}: {}",
-                        image_path, e
-                    ))
-                })?;
+        let image_path_clone = image_path.to_string();
 
-            // Calculate thumbnail dimensions while maintaining aspect ratio
-            let (width, height) = img.dimensions();
-            let (thumb_width, thumb_height) = if width > height {
-                let ratio = height as f32 / width as f32;
-                (size, (size as f32 * ratio) as u32)
-            } else {
-                let ratio = width as f32 / height as f32;
-                ((size as f32 * ratio) as u32, size)
-            };
+        let result = task::spawn_blocking(move || {
+            log_timing!({
+                // Load the image
+                log_debug!("Opening image file: {}", image_path_clone);
+                let img = ImageReader::open(&image_path_clone)
+                    .map_err(|e| {
+                        log_error!(
+                            error = %e,
+                            file_path = %image_path_clone,
+                            operation = "open_image",
+                            "Failed to open image file"
+                        );
+                        AppError::ImageProcessing(format!("Failed to open image {}: {}", image_path_clone, e))
+                    })?
+                    .decode()
+                    .map_err(|e| {
+                        log_error!(
+                            error = %e,
+                            file_path = %image_path_clone,
+                            operation = "decode_image",
+                            "Failed to decode image file"
+                        );
+                        AppError::ImageProcessing(format!(
+                            "Failed to decode image {}: {}",
+                            image_path_clone, e
+                        ))
+                    })?;
 
-            // Resize the image using high-quality filtering
-            let thumbnail = img.resize(thumb_width, thumb_height, FilterType::Lanczos3);
+                // Calculate thumbnail dimensions while maintaining aspect ratio
+                let (width, height) = img.dimensions();
+                log_debug!(
+                    original_width = width,
+                    original_height = height,
+                    "Original image dimensions"
+                );
+                
+                let (thumb_width, thumb_height) = if width > height {
+                    let ratio = height as f32 / width as f32;
+                    (size, (size as f32 * ratio) as u32)
+                } else {
+                    let ratio = width as f32 / height as f32;
+                    ((size as f32 * ratio) as u32, size)
+                };
 
-            // Convert RGBA to RGB if necessary (JPEG doesn't support alpha channel)
-            let thumbnail_rgb = match thumbnail.color() {
-                image::ColorType::Rgba8 => {
-                    // Convert RGBA to RGB by removing alpha channel
-                    image::DynamicImage::ImageRgb8(image::ImageBuffer::from_fn(
-                        thumbnail.width(),
-                        thumbnail.height(),
-                        |x, y| {
-                            let rgba = thumbnail.get_pixel(x, y);
-                            image::Rgb([rgba[0], rgba[1], rgba[2]])
-                        },
-                    ))
-                }
-                image::ColorType::Rgba16 => {
-                    // Convert RGBA16 to RGB8
-                    let rgba16_img = thumbnail.to_rgba16();
-                    image::DynamicImage::ImageRgb8(image::ImageBuffer::from_fn(
-                        thumbnail.width(),
-                        thumbnail.height(),
-                        |x, y| {
-                            let rgba = rgba16_img.get_pixel(x, y);
-                            // Convert 16-bit to 8-bit
-                            image::Rgb([
-                                (rgba[0] >> 8) as u8,
-                                (rgba[1] >> 8) as u8,
-                                (rgba[2] >> 8) as u8,
-                            ])
-                        },
-                    ))
-                }
-                _ => thumbnail, // Already RGB or other compatible format
-            };
+                log_debug!(
+                    thumb_width = thumb_width,
+                    thumb_height = thumb_height,
+                    "Calculated thumbnail dimensions"
+                );
 
-            // Encode as JPEG with good quality
-            let mut buffer = Vec::new();
-            let mut cursor = Cursor::new(&mut buffer);
+                // Resize the image using high-quality filtering
+                log_debug!("Resizing image to thumbnail dimensions");
+                let thumbnail = img.resize(thumb_width, thumb_height, FilterType::Lanczos3);
 
-            thumbnail_rgb
-                .write_to(&mut cursor, ImageFormat::Jpeg)
-                .map_err(|e| {
-                    AppError::ImageProcessing(format!("Failed to encode thumbnail: {}", e))
-                })?;
+                // Convert RGBA to RGB if necessary (JPEG doesn't support alpha channel)
+                log_debug!("Converting color format if needed");
+                let thumbnail_rgb = match thumbnail.color() {
+                    image::ColorType::Rgba8 => {
+                        log_debug!("Converting RGBA8 to RGB8");
+                        // Convert RGBA to RGB by removing alpha channel
+                        image::DynamicImage::ImageRgb8(image::ImageBuffer::from_fn(
+                            thumbnail.width(),
+                            thumbnail.height(),
+                            |x, y| {
+                                let rgba = thumbnail.get_pixel(x, y);
+                                image::Rgb([rgba[0], rgba[1], rgba[2]])
+                            },
+                        ))
+                    }
+                    image::ColorType::Rgba16 => {
+                        log_debug!("Converting RGBA16 to RGB8");
+                        // Convert RGBA16 to RGB8
+                        let rgba16_img = thumbnail.to_rgba16();
+                        image::DynamicImage::ImageRgb8(image::ImageBuffer::from_fn(
+                            thumbnail.width(),
+                            thumbnail.height(),
+                            |x, y| {
+                                let rgba = rgba16_img.get_pixel(x, y);
+                                // Convert 16-bit to 8-bit
+                                image::Rgb([
+                                    (rgba[0] >> 8) as u8,
+                                    (rgba[1] >> 8) as u8,
+                                    (rgba[2] >> 8) as u8,
+                                ])
+                            },
+                        ))
+                    }
+                    _ => {
+                        log_debug!("Using original color format");
+                        thumbnail // Already RGB or other compatible format
+                    }
+                };
 
-            Ok(buffer)
+                // Encode as JPEG with good quality
+                log_debug!("Encoding thumbnail as JPEG");
+                let mut buffer = Vec::new();
+                let mut cursor = Cursor::new(&mut buffer);
+
+                thumbnail_rgb
+                    .write_to(&mut cursor, ImageFormat::Jpeg)
+                    .map_err(|e| {
+                        log_error!(
+                            error = %e,
+                            operation = "encode_thumbnail",
+                            "Failed to encode thumbnail to JPEG"
+                        );
+                        AppError::ImageProcessing(format!("Failed to encode thumbnail: {}", e))
+                    })?;
+
+                log_debug!(
+                    thumbnail_size_bytes = buffer.len(),
+                    "Thumbnail encoding completed"
+                );
+
+                Ok(buffer)
+            }, "generate_thumbnail")
         })
         .await
-        .map_err(|e| AppError::ImageProcessing(format!("Task join error: {}", e)))?
+        .map_err(|e| {
+            log_error!(
+                error = %e,
+                operation = "generate_thumbnail_task",
+                "Task join error during thumbnail generation"
+            );
+            AppError::ImageProcessing(format!("Task join error: {}", e))
+        })?;
+
+        match result {
+            Ok(thumbnail_data) => {
+                log_info!(
+                    operation = "generate_thumbnail",
+                    image_path = image_path,
+                    thumbnail_size_bytes = thumbnail_data.len(),
+                    success = true,
+                    "Thumbnail generation completed successfully"
+                );
+                Ok(thumbnail_data)
+            }
+            Err(e) => {
+                log_error!(
+                    operation = "generate_thumbnail",
+                    image_path = image_path,
+                    error = %e,
+                    success = false,
+                    "Thumbnail generation failed"
+                );
+                Err(e)
+            }
+        }
     }
 
     /// Compress an image with the specified quality
