@@ -7,6 +7,9 @@ export interface UserPreferences {
   articleUploadProvider?: OSSProvider
   imageUploadProvider?: OSSProvider
   lastUsedProvider?: OSSProvider
+  duplicateCheckEnabled?: boolean
+  // Add more preference keys as needed
+  [key: string]: any
 }
 
 const PREFERENCES_KEY = 'imgtoss_user_preferences'
@@ -89,5 +92,36 @@ export function clearUserPreferences(): void {
     localStorage.removeItem(PREFERENCES_KEY)
   } catch (error) {
     console.error('Failed to clear user preferences:', error)
+  }
+}
+
+/**
+ * Get a specific user preference by key
+ */
+export function getUserPreference(key: string): any {
+  console.log(`[UserPreferences] Getting preference for key: ${key}`)
+  try {
+    const prefs = loadUserPreferences()
+    console.log(`[UserPreferences] Current preferences:`, prefs)
+    const value = prefs[key]
+    console.log(`[UserPreferences] Value for ${key}:`, value)
+    return value
+  } catch (error) {
+    console.error(`[UserPreferences] Error getting preference ${key}:`, error)
+    return undefined
+  }
+}
+
+/**
+ * Set a specific user preference by key
+ */
+export function setUserPreference(key: string, value: any): void {
+  console.log(`[UserPreferences] Setting preference ${key} to:`, value)
+  try {
+    saveUserPreferences({ [key]: value })
+    console.log(`[UserPreferences] Successfully saved preference ${key}`)
+  } catch (error) {
+    console.error(`[UserPreferences] Error setting preference ${key}:`, error)
+    throw error
   }
 }

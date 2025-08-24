@@ -1,5 +1,10 @@
 import ArticleUpload from "@/components/panels/article-upload"
+import Layout from "@/components/panels/layout"
 
 export default function ArticleUploadPage() {
-  return <ArticleUpload />
+  return (
+    <Layout>
+      <ArticleUpload />
+    </Layout>
+  )
 }

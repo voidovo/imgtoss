@@ -376,6 +376,13 @@ export class TauriAPI {
     return invoke<boolean>('validate_file_path', { path });
   }
 
+  /**
+   * Get file size in bytes
+   */
+  async getFileSize(path: string): Promise<number> {
+    return invoke<number>('get_file_size', { path });
+  }
+
   // ============================================================================
   // Duplicate Detection Operations
   // ============================================================================
