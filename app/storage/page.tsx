@@ -1,5 +1,5 @@
-import { Layout } from "@/components/kokonutui/layout"
-import { StorageConfig } from "@/components/kokonutui/storage-config"
+import { Layout } from "@/components/panels/layout"
+import { StorageConfig } from "@/components/panels/storage-config"
 
 export default function StoragePage() {
   return (

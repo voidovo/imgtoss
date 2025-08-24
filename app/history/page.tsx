@@ -1,5 +1,5 @@
-import { Layout } from "@/components/kokonutui/layout"
-import { HistoryRecords } from "@/components/kokonutui/history-records"
+import { Layout } from "@/components/panels/layout"
+import { HistoryRecords } from "@/components/panels/history-records"
 
 export default function HistoryPage() {
   return (

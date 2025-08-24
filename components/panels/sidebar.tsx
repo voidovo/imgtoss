@@ -75,7 +75,7 @@ export default function Sidebar() {
                   上传模式
                 </div>
                 <div className="space-y-1">
-                  <NavItem href="/dashboard" icon={FileText}>
+                  <NavItem href="/article-upload" icon={FileText}>
                     文章上传
                   </NavItem>
                   <NavItem href="/image-upload" icon={ImageIcon}>

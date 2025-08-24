@@ -1,5 +1,5 @@
-import ImageUpload from "@/components/kokonutui/image-upload"
-import Layout from "@/components/kokonutui/layout"
+import ImageUpload from "@/components/panels/image-upload"
+import Layout from "@/components/panels/layout"
 
 export default function ImageUploadPage() {
   return (
