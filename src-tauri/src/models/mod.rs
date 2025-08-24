@@ -116,6 +116,8 @@ pub struct OSSConnectionTest {
     pub success: bool,
     pub error: Option<String>,
     pub latency: Option<u64>, // milliseconds
+    pub bucket_exists: Option<bool>, // Whether the specified bucket exists
+    pub available_buckets: Option<Vec<String>>, // List of available buckets (if accessible)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

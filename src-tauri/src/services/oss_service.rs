@@ -130,6 +130,8 @@ impl OSSProviderTrait for AliyunOSS {
                     success: true,
                     error: None,
                     latency: Some(0), // Will be calculated by log_timing
+                    bucket_exists: Some(true),
+                    available_buckets: None, // Aliyun doesn't provide bucket list in simple connection test
                 })
             } else {
                 let error_msg = format!("OSS connection test failed with status: {}", response.status());
@@ -156,6 +158,8 @@ impl OSSProviderTrait for AliyunOSS {
                     success: false,
                     error: Some(error_msg),
                     latency: Some(0), // Will be calculated by log_timing
+                    bucket_exists: Some(false),
+                    available_buckets: None,
                 })
             }
         }, "test_oss_connection");
@@ -362,6 +366,29 @@ impl TencentCOS {
         }
     }
 
+    fn parse_bucket_list_xml(&self, xml_body: &str) -> Result<Vec<String>> {
+        // 解析腾讯云 COS 返回的 bucket 列表 XML
+        // 查找 <Bucket><Name>bucket-name</Name></Bucket> 模式
+        let mut bucket_names = Vec::new();
+        
+        // 使用正则表达式提取 <Name> 标签中的 bucket 名称
+        let re = regex::Regex::new(r"<Name>(.*?)</Name>").map_err(|e| {
+            println!("❌ TencentCOS: Failed to compile regex for bucket name extraction: {}", e);
+            crate::utils::AppError::Configuration("Failed to parse bucket list".to_string())
+        })?;
+        
+        for cap in re.captures_iter(xml_body) {
+            if let Some(name) = cap.get(1) {
+                let bucket_name = name.as_str().to_string();
+                println!("📋 TencentCOS: Found bucket: {}", bucket_name);
+                bucket_names.push(bucket_name);
+            }
+        }
+        
+        println!("✅ TencentCOS: Extracted {} bucket names from XML", bucket_names.len());
+        Ok(bucket_names)
+    }
+
     fn get_authorization(&self, method: &str, uri: &str, headers: &HashMap<String, String>, params: &HashMap<String, String>) -> String {
         use hmac::{Hmac, Mac};
         use sha1::Sha1;
@@ -497,27 +524,85 @@ impl OSSProviderTrait for TencentCOS {
         // 尝试获取响应体
         let body = response.text().await.unwrap_or_default();
         if !body.is_empty() {
-            println!("📄 TencentCOS: Response body: {}", body);
+            println!("📄 TencentCOS: Response body (first 500 chars): {}", 
+                &body[..std::cmp::min(500, body.len())]);
         }
 
         // 腾讯云 COS 服务的成功状态码
         match status_code {
             200 => {
-                println!("✅ TencentCOS: Service connection successful in {}ms", latency);
-                Ok(OSSConnectionTest {
-                    success: true,
-                    error: None,
-                    latency: Some(latency),
-                })
+                // 解析 bucket 列表
+                println!("📋 TencentCOS: Received XML response, parsing bucket list...");
+                
+                let available_buckets = match self.parse_bucket_list_xml(&body) {
+                    Ok(buckets) => {
+                        println!("✅ TencentCOS: Successfully parsed {} buckets", buckets.len());
+                        Some(buckets)
+                    },
+                    Err(e) => {
+                        println!("⚠️  TencentCOS: Failed to parse bucket list: {}", e);
+                        None
+                    }
+                };
+                
+                // 检查指定的 bucket 是否存在
+                let bucket_exists = available_buckets
+                    .as_ref()
+                    .map(|buckets| {
+                        println!("🔍 TencentCOS: Looking for bucket '{}' in available buckets: {:?}", self.config.bucket, buckets);
+                        buckets.contains(&self.config.bucket)
+                    });
+                
+                println!("📋 TencentCOS: Bucket existence check result: {:?}", bucket_exists);
+                
+                match bucket_exists {
+                    Some(true) => {
+                        println!("✅ TencentCOS: Bucket '{}' found in available buckets", self.config.bucket);
+                        Ok(OSSConnectionTest {
+                            success: true,
+                            error: None,
+                            latency: Some(latency),
+                            bucket_exists: Some(true),
+                            available_buckets,
+                        })
+                    },
+                    Some(false) => {
+                        println!("❌ TencentCOS: Bucket '{}' not found in available buckets", self.config.bucket);
+                        let error_msg = format!(
+                            "存储桶 '{}' 不存在或不可访问", 
+                            self.config.bucket
+                        );
+                        
+                        Ok(OSSConnectionTest {
+                            success: false,
+                            error: Some(error_msg),
+                            latency: Some(latency),
+                            bucket_exists: Some(false),
+                            available_buckets,
+                        })
+                    },
+                    None => {
+                        println!("⚠️  TencentCOS: Could not verify bucket existence due to parsing error");
+                        Ok(OSSConnectionTest {
+                            success: true,
+                            error: Some("无法解析存储桶列表，但服务连接正常".to_string()),
+                            latency: Some(latency),
+                            bucket_exists: None,
+                            available_buckets: None,
+                        })
+                    }
+                }
             }
             403 => {
                 println!("✅ TencentCOS: Service reachable, but authentication failed");
                 println!("💡 Check your SecretID and SecretKey credentials");
                 // 认证失败但服务可达，仍然算作连接成功
                 Ok(OSSConnectionTest {
-                    success: true,
-                    error: Some("Authentication failed - check credentials".to_string()),
+                    success: false,
+                    error: Some("认证失败，请检查 SecretID 和 SecretKey".to_string()),
                     latency: Some(latency),
+                    bucket_exists: None,
+                    available_buckets: None,
                 })
             }
             _ => {
@@ -527,6 +612,8 @@ impl OSSProviderTrait for TencentCOS {
                     success: false,
                     error: Some(error_msg),
                     latency: Some(latency),
+                    bucket_exists: None,
+                    available_buckets: None,
                 })
             }
         }
@@ -912,6 +999,8 @@ impl OSSProviderTrait for AWSS3 {
                 success: true,
                 error: error_msg,
                 latency: Some(latency),
+                bucket_exists: None, // AWS doesn't provide bucket validation in simple connection test
+                available_buckets: None,
             })
         } else {
             let error_msg = format!("AWSS3 connection test failed with status: {}", response.status());
@@ -928,6 +1017,8 @@ impl OSSProviderTrait for AWSS3 {
                 success: false,
                 error: Some(error_msg),
                 latency: Some(latency),
+                bucket_exists: None,
+                available_buckets: None,
             })
         }
     }

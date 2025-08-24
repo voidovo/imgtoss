@@ -13,6 +13,7 @@ import { configOperations } from "@/lib/tauri-api"
 import { OSSConfig, OSSProvider, OSSConnectionTest, ConfigValidation } from "@/lib/types"
 import type { SaveOptions } from "@/lib/types"
 import { parseTauriError } from "@/lib/error-handler"
+import { useAppState } from "@/lib/contexts/app-state-context"
 
 // Calculate hash for core connection parameters only
 function getCoreConfigHash(config: OSSConfig): string {
@@ -66,6 +67,7 @@ const providerTemplates = {
 }
 
 export function StorageConfig() {
+  const { state: appState } = useAppState()
   const [state, setState] = useState<StorageConfigState>({
     config: null,
     isLoading: true,
@@ -85,7 +87,7 @@ export function StorageConfig() {
     access_key_secret: "",
     bucket: "",
     region: "",
-    path_template: "images/{date}/{filename}",
+    path_template: "images/{filename}",
     cdn_domain: undefined,
     compression_enabled: true,
     compression_quality: 80,
@@ -93,6 +95,8 @@ export function StorageConfig() {
 
   // Configuration change detection
   const currentConfigHash = getCoreConfigHash(editConfig)
+  
+  // 检查配置是否已变更（与上次测试或初始加载时的配置不同）
   const hasConfigChanged = state.lastTestedConfigHash != null &&
     state.lastTestedConfigHash !== currentConfigHash
 
@@ -112,6 +116,42 @@ export function StorageConfig() {
       }))
       if (config) {
         setEditConfig(config)
+        
+        // 设置基准配置哈希（即使没有缓存的连接状态）
+        const originalConfigHash = getCoreConfigHash(config)
+        
+        // Try to load cached connection status
+        try {
+          const cachedStatus = await configOperations.getCachedConnectionStatus(config)
+          if (cachedStatus) {
+            setState(prev => ({
+              ...prev,
+              lastConnectionTest: cachedStatus,
+              lastTestedConfigHash: originalConfigHash  // 使用原始配置哈希
+            }))
+          } else {
+            // 没有缓存状态时，仍然设置基准配置哈希
+            setState(prev => ({
+              ...prev,
+              lastTestedConfigHash: originalConfigHash
+            }))
+          }
+        } catch (error) {
+          console.warn('Failed to load cached connection status:', error)
+          // 即使加载缓存失败，也要设置基准配置哈希
+          setState(prev => ({
+            ...prev,
+            lastTestedConfigHash: originalConfigHash
+          }))
+        }
+      } else {
+        // 如果没有已保存的配置，设置一个空配置的基准哈希
+        // 这样当用户开始编辑时，会立即检测到变更
+        const emptyConfigHash = getCoreConfigHash(editConfig)
+        setState(prev => ({
+          ...prev,
+          lastTestedConfigHash: emptyConfigHash
+        }))
       }
     } catch (error) {
       const errorMessage = parseTauriError(error).message
@@ -121,6 +161,52 @@ export function StorageConfig() {
         isLoading: false
       }))
     }
+  }
+
+  const handleCancelEdit = () => {
+    // 撤销编辑，恢复到原始配置状态
+    if (state.config) {
+      // 如果有已保存的配置，恢复到原始配置
+      setEditConfig(state.config)
+      
+      // 恢复基准配置哈希到原始配置
+      const originalConfigHash = getCoreConfigHash(state.config)
+      setState(prev => ({
+        ...prev,
+        error: null,
+        lastTestedConfigHash: originalConfigHash,
+        // 如果在编辑过程中进行了手动测试，清除这些结果
+        // 只保留来自AppState的自动测试结果
+        lastConnectionTest: null, // 清除组件本地的测试结果
+      }))
+    } else {
+      // 如果没有已保存的配置，恢复到默认配置
+      const defaultConfig = {
+        provider: OSSProvider.Aliyun,
+        endpoint: "",
+        access_key_id: "",
+        access_key_secret: "",
+        bucket: "",
+        region: "",
+        path_template: "images/{filename}",
+        cdn_domain: undefined,
+        compression_enabled: true,
+        compression_quality: 80,
+      }
+      setEditConfig(defaultConfig)
+      
+      // 恢复到默认配置的基准哈希
+      const defaultConfigHash = getCoreConfigHash(defaultConfig)
+      setState(prev => ({
+        ...prev,
+        error: null,
+        lastTestedConfigHash: defaultConfigHash,
+        lastConnectionTest: null, // 清除编辑过程中的测试结果
+      }))
+    }
+    
+    // 退出编辑模式
+    setIsEditing(false)
   }
 
   const handleSaveConfig = async () => {
@@ -168,10 +254,15 @@ export function StorageConfig() {
     try {
       setState(prev => ({ ...prev, isTesting: true, error: null }))
       const connectionTest = await configOperations.testOSSConnection(editConfig)
+      
+      // Check if connection test failed and set error accordingly
+      const errorMessage = connectionTest.success ? null : (connectionTest.error || "连接测试失败")
+      
       setState(prev => ({
         ...prev,
         lastConnectionTest: connectionTest,
         isTesting: false,
+        error: errorMessage,
         lastTestedConfigHash: connectionTest.success ? currentConfigHash : prev.lastTestedConfigHash // Only update hash on successful test
       }))
     } catch (error) {
@@ -244,8 +335,8 @@ export function StorageConfig() {
   }
 
   const getStatusText = (success?: boolean, configChanged?: boolean) => {
-    if (configChanged) return "配置已变更"
-    if (success === undefined) return "未测试"
+    if (configChanged) return "配置已变更，需重新测试"
+    if (success === undefined) return "启动时将自动测试连通性"
     return success ? "连接成功" : "连接失败"
   }
 
@@ -256,8 +347,35 @@ export function StorageConfig() {
   }
 
   const getTestButtonStyle = (configChanged?: boolean) => {
-    if (configChanged) return "border-blue-500 bg-blue-50"
+    if (configChanged) return "border-blue-500 bg-blue-50 text-blue-700 hover:bg-blue-100"
     return ""
+  }
+
+  // Helper to get connection status for display  
+  const getDisplayConnectionStatus = () => {
+    // Prioritize manual test results (state.lastConnectionTest) over automatic test results (appState.lastConnectionTest)
+    const connectionTest = state.lastConnectionTest || appState.lastConnectionTest
+    
+    // Debug logging
+    console.log('StorageConfig - Connection status debug:', {
+      appStateTest: appState.lastConnectionTest,
+      localStateTest: state.lastConnectionTest,
+      selectedTest: connectionTest,
+      success: connectionTest?.success,
+      hasConfigChanged,
+    })
+    
+    if (connectionTest) {
+      return {
+        success: connectionTest.success,
+        hasConfigChanged: state.lastConnectionTest ? false : hasConfigChanged
+      }
+    }
+    
+    return {
+      success: undefined,
+      hasConfigChanged: false
+    }
   }
 
   if (state.isLoading) {
@@ -331,7 +449,8 @@ export function StorageConfig() {
               <div className="flex items-center gap-3">
                 {(() => {
                   const template = providerTemplates[state.config.provider]
-                  const StatusIcon = getStatusIcon(state.lastConnectionTest?.success)
+                  const displayStatus = getDisplayConnectionStatus()
+                  const StatusIcon = getStatusIcon(displayStatus.success, displayStatus.hasConfigChanged)
                   return (
                     <>
                       <template.icon className="h-5 w-5 text-muted-foreground" />
@@ -344,13 +463,14 @@ export function StorageConfig() {
                 })()}
               </div>
               <div className="flex items-center gap-2">
-                <div className={`flex items-center gap-1 ${getStatusColor(state.lastConnectionTest?.success, hasConfigChanged)}`}>
+                <div className={`flex items-center gap-1 ${getStatusColor(getDisplayConnectionStatus().success, getDisplayConnectionStatus().hasConfigChanged)}`}>
                   {(() => {
-                    const StatusIcon = getStatusIcon(state.lastConnectionTest?.success, hasConfigChanged)
+                    const displayStatus = getDisplayConnectionStatus()
+                    const StatusIcon = getStatusIcon(displayStatus.success, displayStatus.hasConfigChanged)
                     return <StatusIcon className="h-4 w-4" />
                   })()}
                   <span className="text-sm">
-                    {getStatusText(state.lastConnectionTest?.success, hasConfigChanged)}
+                    {getStatusText(getDisplayConnectionStatus().success, getDisplayConnectionStatus().hasConfigChanged)}
                   </span>
                 </div>
               </div>
@@ -454,11 +574,6 @@ export function StorageConfig() {
                   value={editConfig.endpoint}
                   onChange={(e) => setEditConfig(prev => ({ ...prev, endpoint: e.target.value }))}
                 />
-                {editConfig.provider === OSSProvider.Tencent && (
-                  <p className="text-xs text-muted-foreground">
-                    注意：腾讯云COS使用统一域名格式，无需包含https://前缀
-                  </p>
-                )}
               </div>
             </div>
 
@@ -606,22 +721,40 @@ export function StorageConfig() {
             )}
 
             {/* Connection Test Results */}
-            {state.lastConnectionTest && (
-              <Alert variant={state.lastConnectionTest.success ? "default" : "destructive"} 
-                     className={state.lastConnectionTest.success ? "border-green-200 bg-green-50 text-green-800" : ""}>
-                {state.lastConnectionTest.success ? (
-                  <CheckCircle className="h-4 w-4 text-green-600" />
-                ) : (
-                  <AlertCircle className="h-4 w-4" />
-                )}
-                <AlertDescription className={state.lastConnectionTest.success ? "text-green-800" : ""}>
-                  {state.lastConnectionTest.success
-                    ? `连接测试成功 (延迟: ${state.lastConnectionTest.latency}ms)`
-                    : `连接测试失败: ${state.lastConnectionTest.error}`
-                  }
-                </AlertDescription>
-              </Alert>
-            )}
+            {(() => {
+              // Prioritize manual test results (state.lastConnectionTest) over automatic test results (appState.lastConnectionTest)
+              const connectionTest = state.lastConnectionTest || appState.lastConnectionTest
+              if (!connectionTest) return null
+              
+              return (
+                <Alert variant={connectionTest.success ? "default" : "destructive"} 
+                       className={connectionTest.success ? "border-green-200 bg-green-50 text-green-800" : ""}>
+                  {connectionTest.success ? (
+                    <CheckCircle className="h-4 w-4 text-green-600" />
+                  ) : (
+                    <AlertCircle className="h-4 w-4" />
+                  )}
+                  <AlertDescription className={connectionTest.success ? "text-green-800" : ""}>
+                    {connectionTest.success
+                      ? `连接测试成功 (延迟: ${connectionTest.latency}ms)`
+                      : `连接测试失败: ${connectionTest.error}`
+                    }
+                    {/* 显示 bucket 验证信息 */}
+                    {connectionTest.bucket_exists === false && (
+                      <div className="mt-2">
+                        <div className="text-sm font-medium">可用的存储桶：</div>
+                        <div className="text-sm text-muted-foreground mt-1">
+                          {connectionTest.available_buckets?.length 
+                            ? connectionTest.available_buckets.join(', ')
+                            : '无法获取存储桶列表'
+                          }
+                        </div>
+                      </div>
+                    )}
+                  </AlertDescription>
+                </Alert>
+              )
+            })()}
 
             <Alert>
               <AlertCircle className="h-4 w-4" />
@@ -632,16 +765,21 @@ export function StorageConfig() {
                     <br />• 存储桶格式：bucket-name-appid（可在腾讯云控制台查看完整格式）
                     <br />• SecretId/SecretKey：在腾讯云访问管理(CAM)中获取
                     <br />• 确保密钥具有对应存储桶的读写权限
+                    <br />• 应用启动时将自动进行连接测试，无需每次手动测试
                     <br />配置保存前会自动进行连接测试。
                   </>
                 ) : (
-                  "请确保提供的访问密钥具有对应存储桶的读写权限。配置保存前会自动进行连接测试。"
+                  <>
+                    请确保提供的访问密钥具有对应存储桶的读写权限。
+                    <br />• 应用启动时将自动进行连接测试，无需每次手动测试
+                    <br />配置保存前会自动进行连接测试。
+                  </>
                 )}
               </AlertDescription>
             </Alert>
 
             <div className="flex justify-end gap-2 pt-4">
-              <Button variant="outline" onClick={() => setIsEditing(false)}>
+              <Button variant="outline" onClick={handleCancelEdit}>
                 取消
               </Button>
               <Button

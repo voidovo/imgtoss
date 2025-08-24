@@ -453,7 +453,7 @@ export function HistoryRecords() {
                         </div>
                       </TableCell>
                       <TableCell className="font-mono text-sm">{item.image_count}</TableCell>
-                      <TableCell className="font-mono text-sm">{formatFileSizeHuman(item.total_size)}</TableCell>
+                      <TableCell className="font-mono text-sm">{formatFileSizeHuman(item.total_size || 0)}</TableCell>
                       <TableCell>
                         <div className="flex items-center gap-2">
                           <Calendar className="h-4 w-4 text-muted-foreground" />

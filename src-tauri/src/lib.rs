@@ -31,6 +31,8 @@ pub fn run() {
             load_oss_config,
             test_oss_connection,
             validate_oss_config,
+            get_cached_connection_status,
+            clear_connection_cache,
             list_oss_objects,
             export_oss_config,
             import_oss_config,
