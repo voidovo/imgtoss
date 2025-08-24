@@ -386,17 +386,17 @@ export function HistoryRecords() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="w-12">
+                    <TableHead className="w-12 text-center">
                       <Checkbox
                         checked={selectedItems.length === processedData.length && processedData.length > 0}
                         onCheckedChange={handleSelectAll}
                       />
                     </TableHead>
-                    <TableHead>文件</TableHead>
-                    <TableHead>文件大小</TableHead>
-                    <TableHead>上传时间</TableHead>
-                    <TableHead>状态</TableHead>
-                    <TableHead>复制链接</TableHead>
+                    <TableHead className="text-center">文件</TableHead>
+                    <TableHead className="text-center">文件大小</TableHead>
+                    <TableHead className="text-center">上传时间</TableHead>
+                    <TableHead className="text-center">状态</TableHead>
+                    <TableHead className="text-center">复制链接</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>

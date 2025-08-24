@@ -3,7 +3,7 @@
 import type React from "react"
 
 import { useState, useCallback, useRef, useEffect } from "react"
-import { Upload, X, ImageIcon, CheckCircle, AlertCircle, Trash2, Eye, Copy, RefreshCw } from "lucide-react"
+import { Upload, X, ImageIcon, CheckCircle, AlertCircle, Trash2, Eye, Copy, RefreshCw, Image, Calendar } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Progress } from "@/components/ui/progress"
@@ -12,7 +12,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { tauriAPI } from "@/lib/tauri-api"
-import type { OSSConfig, UploadResult, UploadProgress } from "@/lib/types"
+import { historyOperations } from "@/lib/tauri-api"
+import type { OSSConfig, UploadResult, UploadProgress, HistoryRecord } from "@/lib/types"
 import { NotificationType } from "@/lib/types"
 import { useProgressMonitoring } from "@/lib/hooks/use-progress-monitoring"
 import { NotificationSystem, ProgressNotificationCompact } from "@/components/ui/notification-system"
@@ -42,6 +43,7 @@ export default function ImageUpload() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const progressInterval = useRef<NodeJS.Timeout | null>(null)
   const [duplicateCheckEnabled, setDuplicateCheckEnabled] = useState(true)
+  const [recentHistory, setRecentHistory] = useState<HistoryRecord[]>([])
 
   // Progress monitoring hook
   const {
@@ -71,6 +73,24 @@ export default function ImageUpload() {
       }
     }
 
+    const loadRecentHistory = async () => {
+      try {
+        // 获取最近5条成功的图片上传记录 (operation = "upload")
+        const result = await historyOperations.searchHistory(
+          undefined, // searchTerm
+          "upload", // operationType
+          true, // successOnly
+          undefined, // startDate
+          undefined, // endDate
+          1, // page
+          5 // pageSize
+        )
+        setRecentHistory(result.items || [])
+      } catch (error) {
+        console.error("Failed to load recent history:", error)
+      }
+    }
+
     const initializeMonitoring = async () => {
       try {
         await startMonitoring()
@@ -80,6 +100,7 @@ export default function ImageUpload() {
     }
 
     loadConfig()
+    loadRecentHistory()
     initializeMonitoring()
 
     return () => {
@@ -366,6 +387,15 @@ export default function ImageUpload() {
     // Could add toast notification here
   }
 
+  const copyImageUrlFromHistory = async (url: string) => {
+    try {
+      await navigator.clipboard.writeText(url)
+      // 可以在这里添加 toast 提示
+    } catch (error) {
+      console.error('Failed to copy to clipboard:', error)
+    }
+  }
+
   const totalFiles = files.length
   const successFiles = files.filter((f) => f.status === "success").length
   const errorFiles = files.filter((f) => f.status === "error").length
@@ -645,6 +675,76 @@ export default function ImageUpload() {
           </CardContent>
         </Card>
       )}
+
+      {/* Recent Upload History */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-lg">最近上传记录</CardTitle>
+          <p className="text-sm text-muted-foreground">显示最近的图片上传记录</p>
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-3">
+            {recentHistory.length > 0 ? (
+              recentHistory.map((record) => (
+                <div key={record.id} className="flex items-center justify-between p-3 border rounded-lg">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 bg-gray-200 dark:bg-gray-700 rounded flex items-center justify-center">
+                      <Image className="h-5 w-5 text-gray-500" />
+                    </div>
+                    <div>
+                      <p className="font-medium text-sm">
+                        <FilenameDisplay 
+                          filePath={record.files.length > 0 ? record.files[0] : 'Unknown file'}
+                          maxLength={25}
+                          showTooltip={true}
+                        />
+                        {record.files.length > 1 && (
+                          <span className="text-xs text-gray-500 ml-1">
+                            +{record.files.length - 1}个文件
+                          </span>
+                        )}
+                      </p>
+                      <div className="flex items-center gap-2 text-xs text-gray-500">
+                        <Calendar className="h-3 w-3" />
+                        <span>{new Date(record.timestamp).toLocaleString()}</span>
+                        {record.total_size && (
+                          <>
+                            <span>•</span>
+                            <span>{formatFileSizeHuman(record.total_size)}</span>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Badge 
+                      variant={record.success ? "default" : "destructive"}
+                      className={record.success ? "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200" : ""}
+                    >
+                      {record.success ? "已上传" : "失败"}
+                    </Badge>
+                    {record.success && record.metadata?.uploaded_url && (
+                      <Button 
+                        variant="outline" 
+                        size="sm"
+                        onClick={() => copyImageUrlFromHistory(record.metadata.uploaded_url)}
+                      >
+                        <Copy className="h-3 w-3 mr-1" />
+                        复制链接
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              ))
+            ) : (
+              <div className="text-center py-8 text-gray-500">
+                <ImageIcon className="h-12 w-12 mx-auto mb-2 text-gray-300" />
+                <p>暂无上传记录</p>
+              </div>
+            )}
+          </div>
+        </CardContent>
+      </Card>
 
       {/* Notification System */}
       <NotificationSystem

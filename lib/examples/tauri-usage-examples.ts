@@ -174,10 +174,10 @@ export async function manageHistoryExample() {
     // Get statistics
     const stats = await tauriAPI.getHistoryStatistics();
     console.log('Statistics:', {
-      totalOperations: stats.total_operations,
-      successRate: `${((stats.successful_operations / stats.total_operations) * 100).toFixed(1)}%`,
-      totalImagesUploaded: stats.total_images_uploaded,
-      averageDuration: `${stats.average_operation_duration}ms`,
+      totalOperations: stats.total_records,
+      successRate: `${((stats.successful_operations / stats.total_records) * 100).toFixed(1)}%`,
+      totalImagesUploaded: stats.total_images_processed,
+      averageDuration: `${stats.average_duration}ms`,
     });
 
     return { history: historyPage, stats };
