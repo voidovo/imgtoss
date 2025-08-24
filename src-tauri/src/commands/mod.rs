@@ -1552,7 +1552,7 @@ pub async fn get_upload_history(
 
     let offset = (validated_page - 1) * validated_page_size;
     let query = HistoryQuery {
-        operation_type: None,
+        operation_type: Some(OperationType::Upload), // 只返回上传操作
         start_date: None,
         end_date: None,
         success_only: None,
@@ -1630,7 +1630,7 @@ pub async fn search_history(
             _ => return Err("Invalid operation type".to_string()),
         }
     } else {
-        None
+        Some(OperationType::Upload) // 默认只返回上传操作
     };
 
     // Parse dates

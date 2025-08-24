@@ -274,15 +274,16 @@ export interface HistoryQuery {
 }
 
 export interface HistoryStatistics {
-  total_operations: number;
+  total_records: number;
   successful_operations: number;
   failed_operations: number;
-  total_files_processed: number;
-  total_images_uploaded: number;
-  total_size_uploaded: number;
-  average_operation_duration: number;
+  success_rate: number;
   operations_by_type: Record<string, number>;
-  operations_by_date: Record<string, number>;
+  total_images_processed: number;
+  total_size_processed: number;
+  average_duration: number;
+  oldest_record?: string; // DateTime serialized as ISO string
+  newest_record?: string; // DateTime serialized as ISO string
 }
 
 // ============================================================================

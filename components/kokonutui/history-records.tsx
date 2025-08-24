@@ -51,7 +51,6 @@ function formatDate(dateString: string): string {
 
 export function HistoryRecords() {
   const [searchTerm, setSearchTerm] = useState("")
-  const [selectedProvider, setSelectedProvider] = useState("all")
   const [selectedStatus, setSelectedStatus] = useState("all")
   const [selectedItems, setSelectedItems] = useState<string[]>([])
   const [sortBy, setSortBy] = useState("timestamp")
@@ -73,16 +72,15 @@ export function HistoryRecords() {
       setLoading(true)
       setError(null)
 
-      // Determine operation type filter
-      const operationType = selectedStatus === "all" ? undefined : selectedStatus;
-      const successOnly = selectedProvider === "success" ? true :
-        selectedProvider === "failed" ? false : undefined;
+      // Determine success filter
+      const successOnly = selectedStatus === "success" ? true :
+        selectedStatus === "failed" ? false : undefined;
 
       // Use search if there's a search term, otherwise use regular pagination
       const result = searchTerm.trim()
         ? await historyOperations.searchHistory(
           searchTerm,
-          operationType,
+          undefined, // operation_type - 不再需要，后端默认过滤上传
           successOnly,
           undefined, // start_date
           undefined, // end_date
@@ -114,7 +112,7 @@ export function HistoryRecords() {
   // Load data on component mount and when filters change
   useEffect(() => {
     loadHistoryData();
-  }, [searchTerm, selectedProvider, selectedStatus, currentPage]);
+  }, [searchTerm, selectedStatus, currentPage]);
 
   // Load statistics on mount
   useEffect(() => {
@@ -183,6 +181,15 @@ export function HistoryRecords() {
     // You could add a toast notification here
   }
 
+  const copyImageUrl = (url: string) => {
+    navigator.clipboard.writeText(url).then(() => {
+      // TODO: 可以在这里添加 toast 通知来显示复制成功
+      console.log('已复制图片链接:', url)
+    }).catch((error) => {
+      console.error('复制失败:', error)
+    })
+  }
+
   const handleExportHistory = async () => {
     try {
       await historyOperations.exportHistoryToFile();
@@ -213,22 +220,6 @@ export function HistoryRecords() {
     } else {
       return <Badge variant="destructive">失败</Badge>
     }
-  }
-
-  const getOperationBadge = (operation: string) => {
-    const colors = {
-      "upload": "bg-blue-100 text-blue-800",
-      "replace": "bg-orange-100 text-orange-800",
-      "restore": "bg-purple-100 text-purple-800",
-      "backup": "bg-green-100 text-green-800",
-      "scan": "bg-gray-100 text-gray-800",
-    }
-
-    return (
-      <Badge variant="outline" className={colors[operation as keyof typeof colors] || "bg-gray-100 text-gray-800"}>
-        {operation}
-      </Badge>
-    )
   }
 
   if (error) {
@@ -286,12 +277,12 @@ export function HistoryRecords() {
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">总操作数</CardTitle>
+            <CardTitle className="text-sm font-medium">总图片数</CardTitle>
             <FileImage className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{statistics?.total_operations || 0}</div>
-            <p className="text-xs text-muted-foreground">历史记录总数</p>
+            <div className="text-2xl font-bold">{statistics?.total_images_processed || 0}</div>
+            <p className="text-xs text-muted-foreground">已上传图片总数</p>
           </CardContent>
         </Card>
 
@@ -305,7 +296,7 @@ export function HistoryRecords() {
               {statistics?.successful_operations || 0}
             </div>
             <p className="text-xs text-muted-foreground">
-              成功率 {statistics ? Math.round((statistics.successful_operations / statistics.total_operations) * 100) : 0}%
+              成功率 {statistics ? Math.round(statistics.success_rate) : 0}%
             </p>
           </CardContent>
         </Card>
@@ -316,19 +307,19 @@ export function HistoryRecords() {
             <HardDrive className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{formatFileSizeHuman(statistics?.total_size_uploaded || 0)}</div>
+            <div className="text-2xl font-bold">{formatFileSizeHuman(statistics?.total_size_processed || 0)}</div>
             <p className="text-xs text-muted-foreground">累计上传大小</p>
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">图片总数</CardTitle>
+            <CardTitle className="text-sm font-medium">操作记录</CardTitle>
             <Hash className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{statistics?.total_images_uploaded || 0}</div>
-            <p className="text-xs text-muted-foreground">已上传图片数量</p>
+            <div className="text-2xl font-bold">{statistics?.total_records || 0}</div>
+            <p className="text-xs text-muted-foreground">历史记录总数</p>
           </CardContent>
         </Card>
       </div>
@@ -343,27 +334,13 @@ export function HistoryRecords() {
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                 <Input
-                  placeholder="搜索文件名或操作类型..."
+                  placeholder="搜索文件名..."
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
                   className="pl-10"
                 />
               </div>
             </div>
-
-            <Select value={selectedProvider} onValueChange={setSelectedProvider}>
-              <SelectTrigger className="w-full md:w-[180px]">
-                <SelectValue placeholder="操作类型" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">所有操作</SelectItem>
-                <SelectItem value="upload">上传</SelectItem>
-                <SelectItem value="replace">替换</SelectItem>
-                <SelectItem value="restore">恢复</SelectItem>
-                <SelectItem value="backup">备份</SelectItem>
-                <SelectItem value="scan">扫描</SelectItem>
-              </SelectContent>
-            </Select>
 
             <Select value={selectedStatus} onValueChange={setSelectedStatus}>
               <SelectTrigger className="w-full md:w-[120px]">
@@ -390,8 +367,6 @@ export function HistoryRecords() {
               <SelectContent>
                 <SelectItem value="timestamp-desc">最新时间</SelectItem>
                 <SelectItem value="timestamp-asc">最早时间</SelectItem>
-                <SelectItem value="operation-asc">操作类型 A-Z</SelectItem>
-                <SelectItem value="operation-desc">操作类型 Z-A</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -417,13 +392,11 @@ export function HistoryRecords() {
                         onCheckedChange={handleSelectAll}
                       />
                     </TableHead>
-                    <TableHead>操作</TableHead>
                     <TableHead>文件</TableHead>
-                    <TableHead>图片数量</TableHead>
                     <TableHead>文件大小</TableHead>
-                    <TableHead>时间</TableHead>
+                    <TableHead>上传时间</TableHead>
                     <TableHead>状态</TableHead>
-                    <TableHead className="w-12">操作</TableHead>
+                    <TableHead>复制链接</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -435,7 +408,6 @@ export function HistoryRecords() {
                           onCheckedChange={(checked) => handleSelectItem(item.id, checked as boolean)}
                         />
                       </TableCell>
-                      <TableCell>{getOperationBadge(item.operation)}</TableCell>
                       <TableCell>
                         <div className="min-w-0 flex-1">
                           <div className="font-medium">
@@ -452,7 +424,6 @@ export function HistoryRecords() {
                           )}
                         </div>
                       </TableCell>
-                      <TableCell className="font-mono text-sm">{item.image_count}</TableCell>
                       <TableCell className="font-mono text-sm">{formatFileSizeHuman(item.total_size || 0)}</TableCell>
                       <TableCell>
                         <div className="flex items-center gap-2">
@@ -462,30 +433,19 @@ export function HistoryRecords() {
                       </TableCell>
                       <TableCell>{getStatusBadge(item.success)}</TableCell>
                       <TableCell>
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <Button variant="ghost" size="sm" className="h-8 w-8 p-0">
-                              <MoreHorizontal className="h-4 w-4" />
-                            </Button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end">
-                            <DropdownMenuItem onClick={() => copyToClipboard(item.id)}>
-                              <Copy className="h-4 w-4 mr-2" />
-                              复制ID
-                            </DropdownMenuItem>
-                            {item.error_message && (
-                              <DropdownMenuItem onClick={() => copyToClipboard(item.error_message!)}>
-                                <Eye className="h-4 w-4 mr-2" />
-                                查看错误
-                              </DropdownMenuItem>
-                            )}
-                            <DropdownMenuSeparator />
-                            <DropdownMenuItem className="text-red-600">
-                              <Trash2 className="h-4 w-4 mr-2" />
-                              删除记录
-                            </DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
+                        {item.success && item.metadata?.uploaded_url ? (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => copyImageUrl(item.metadata.uploaded_url)}
+                            className="h-8 gap-2"
+                          >
+                            <Copy className="h-4 w-4" />
+                            复制链接
+                          </Button>
+                        ) : (
+                          <span className="text-sm text-muted-foreground">无链接</span>
+                        )}
                       </TableCell>
                     </TableRow>
                   ))}
@@ -497,9 +457,9 @@ export function HistoryRecords() {
                   <FileImage className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
                   <h3 className="text-lg font-medium mb-2">暂无记录</h3>
                   <p className="text-muted-foreground">
-                    {searchTerm || selectedProvider !== "all" || selectedStatus !== "all"
+                    {searchTerm || selectedStatus !== "all"
                       ? "没有找到符合条件的记录"
-                      : "还没有任何操作记录"}
+                      : "还没有任何上传记录"}
                   </p>
                 </div>
               )}
