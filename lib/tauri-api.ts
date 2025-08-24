@@ -145,6 +145,20 @@ export class TauriAPI {
   }
 
   /**
+   * Get cached connection status for OSS configuration
+   */
+  async getCachedConnectionStatus(config: OSSConfig): Promise<OSSConnectionTest | null> {
+    return invoke<OSSConnectionTest | null>('get_cached_connection_status', { config });
+  }
+
+  /**
+   * Clear all cached connection test results
+   */
+  async clearConnectionCache(): Promise<void> {
+    return invoke<void>('clear_connection_cache');
+  }
+
+  /**
    * List objects in OSS bucket with optional prefix
    */
   async listOSSObjects(config: OSSConfig, prefix: string = ''): Promise<ObjectInfo[]> {
@@ -484,6 +498,8 @@ export const configOperations = {
   loadOSSConfig: () => tauriAPI.loadOSSConfig(),
   testOSSConnection: (config: OSSConfig) => tauriAPI.testOSSConnection(config),
   validateOSSConfig: (config: OSSConfig) => tauriAPI.validateOSSConfig(config),
+  getCachedConnectionStatus: (config: OSSConfig) => tauriAPI.getCachedConnectionStatus(config),
+  clearConnectionCache: () => tauriAPI.clearConnectionCache(),
   listOSSObjects: (config: OSSConfig, prefix?: string) => tauriAPI.listOSSObjects(config, prefix || ''),
   exportOSSConfig: () => tauriAPI.exportOSSConfig(),
   importOSSConfig: (configJson: string) => tauriAPI.importOSSConfig(configJson),

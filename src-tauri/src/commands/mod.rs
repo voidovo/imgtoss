@@ -1069,6 +1069,22 @@ pub async fn validate_oss_config(config: OSSConfig) -> Result<ConfigValidation, 
 }
 
 #[tauri::command]
+pub async fn get_cached_connection_status(config: OSSConfig) -> Result<Option<OSSConnectionTest>, String> {
+    // Basic parameter validation first
+    validate_oss_config_params(&config).map_err(|e| e.to_string())?;
+
+    let config_service = ConfigService::new().map_err(|e| e.to_string())?;
+    Ok(config_service.get_cached_connection_status(&config).await)
+}
+
+#[tauri::command]
+pub async fn clear_connection_cache() -> Result<(), String> {
+    let config_service = ConfigService::new().map_err(|e| e.to_string())?;
+    config_service.clear_all_cache();
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn list_oss_objects(
     config: OSSConfig,
     prefix: String,

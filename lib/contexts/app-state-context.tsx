@@ -4,6 +4,7 @@ import React, { createContext, useContext, useReducer, useEffect, useCallback, R
 import { tauriAPI } from '../tauri-api';
 import type {
   OSSConfig,
+  OSSConnectionTest,
   SystemHealth,
   UploadProgress,
   HistoryStatistics,
@@ -36,6 +37,7 @@ export interface AppState {
   ossConfig: OSSConfig | null;
   isConfigLoaded: boolean;
   configError: string | null;
+  lastConnectionTest: OSSConnectionTest | null;
   
   // System health and monitoring
   systemHealth: SystemHealth | null;
@@ -75,6 +77,7 @@ export type AppAction =
   | { type: 'SET_OSS_CONFIG'; payload: OSSConfig | null }
   | { type: 'SET_CONFIG_LOADING'; payload: boolean }
   | { type: 'SET_CONFIG_ERROR'; payload: string | null }
+  | { type: 'SET_LAST_CONNECTION_TEST'; payload: OSSConnectionTest | null }
   | { type: 'SET_SYSTEM_HEALTH'; payload: SystemHealth | null }
   | { type: 'SET_HEALTH_LOADING'; payload: boolean }
   | { type: 'SET_HEALTH_ERROR'; payload: string | null }
@@ -116,6 +119,7 @@ const initialState: AppState = {
   ossConfig: null,
   isConfigLoaded: false,
   configError: null,
+  lastConnectionTest: null,
   systemHealth: null,
   isHealthLoading: false,
   healthError: null,
@@ -154,6 +158,9 @@ function appStateReducer(state: AppState, action: AppAction): AppState {
       
     case 'SET_CONFIG_ERROR':
       return { ...state, configError: action.payload };
+      
+    case 'SET_LAST_CONNECTION_TEST':
+      return { ...state, lastConnectionTest: action.payload };
       
     case 'SET_SYSTEM_HEALTH':
       return { 
@@ -560,6 +567,42 @@ export function AppStateProvider({ children }: AppStateProviderProps) {
       // Load configuration
       await loadConfig();
       
+      // Auto-test connection if config exists
+      try {
+        const config = await tauriAPI.loadOSSConfig();
+        if (config) {
+          console.log('Configuration loaded, performing automatic connection test...');
+          const connectionTest = await tauriAPI.testOSSConnection(config);
+          
+          // Save connection test result to state
+          dispatch({ type: 'SET_LAST_CONNECTION_TEST', payload: connectionTest });
+          
+          if (connectionTest.success) {
+            console.log(`Connection test successful (latency: ${connectionTest.latency}ms)`);
+            if (state.userPreferences.showNotifications) {
+              addNotification({
+                type: 'Success' as any,
+                title: '存储连接成功',
+                message: `连接测试成功，延迟: ${connectionTest.latency}ms`,
+                dismissible: true,
+                auto_dismiss: true,
+              });
+            }
+          } else {
+            console.warn('Connection test failed:', connectionTest.error);
+            addNotification({
+              type: 'Warning' as any,
+              title: '存储连接失败',
+              message: `连接测试失败: ${connectionTest.error || '未知错误'}`,
+              dismissible: true,
+              auto_dismiss: false,
+            });
+          }
+        }
+      } catch (error) {
+        console.warn('Failed to perform automatic connection test:', error);
+      }
+      
       // Load notification config
       try {
         const notificationConfig = await tauriAPI.getNotificationConfig();
@@ -584,7 +627,7 @@ export function AppStateProvider({ children }: AppStateProviderProps) {
         recoverable: true,
       });
     }
-  }, [loadUserPreferences, loadConfig, refreshSystemHealth, refreshHistoryStatistics]);
+  }, [loadUserPreferences, loadConfig, refreshSystemHealth, refreshHistoryStatistics, state.userPreferences.showNotifications, addNotification]);
 
   const syncWithBackend = useCallback(async () => {
     try {

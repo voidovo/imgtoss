@@ -17,11 +17,12 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const CONFIG_VERSION: u32 = 1;
 const CONFIG_FILE_NAME: &str = "config.json";
+const CACHE_FILE_NAME: &str = "connection_cache.json";
 const CONFIG_DIR_NAME: &str = "imgtoss";
 const CACHE_EXPIRY_SECONDS: u64 = 300; // 5 minutes
 
 // OSS Connection Test Cache
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct CachedTestResult {
     config_hash: String,
     result: OSSConnectionTest,
@@ -221,8 +222,71 @@ impl ConfigService {
         format!("{:x}", hasher.finalize())
     }
 
+    /// Load cache from file system
+    fn load_cache_from_file(&self) -> HashMap<String, CachedTestResult> {
+        let cache_path = self.get_cache_file_path();
+        
+        if !cache_path.exists() {
+            return HashMap::new();
+        }
+        
+        match fs::read_to_string(&cache_path) {
+            Ok(content) => {
+                match serde_json::from_str::<HashMap<String, CachedTestResult>>(&content) {
+                    Ok(mut cache) => {
+                        // Remove expired entries
+                        cache.retain(|_, cached| !cached.is_expired());
+                        println!("📂 Loaded {} cached connection results from file", cache.len());
+                        cache
+                    }
+                    Err(e) => {
+                        println!("⚠️ Failed to parse cache file: {}, starting fresh", e);
+                        HashMap::new()
+                    }
+                }
+            }
+            Err(e) => {
+                println!("⚠️ Failed to read cache file: {}, starting fresh", e);
+                HashMap::new()
+            }
+        }
+    }
+
+    /// Save cache to file system
+    fn save_cache_to_file(&self, cache: &HashMap<String, CachedTestResult>) {
+        let cache_path = self.get_cache_file_path();
+        
+        match serde_json::to_string_pretty(cache) {
+            Ok(content) => {
+                if let Err(e) = fs::write(&cache_path, content) {
+                    println!("⚠️ Failed to save cache to file: {}", e);
+                } else {
+                    println!("💾 Saved {} connection test results to cache file", cache.len());
+                }
+            }
+            Err(e) => {
+                println!("⚠️ Failed to serialize cache: {}", e);
+            }
+        }
+    }
+
+    /// Initialize cache from file on first access
+    fn ensure_cache_loaded(&self) {
+        if let Ok(mut cache) = CONNECTION_TEST_CACHE.lock() {
+            if cache.is_empty() {
+                let file_cache = self.load_cache_from_file();
+                if !file_cache.is_empty() {
+                    *cache = file_cache;
+                }
+            }
+        }
+    }
+
     /// Get cached test result if available and not expired
     fn get_cached_test_result(&self, config_hash: &str) -> Option<OSSConnectionTest> {
+        // Ensure cache is loaded from file
+        self.ensure_cache_loaded();
+        
         let cache = CONNECTION_TEST_CACHE.lock().ok()?;
         let cached_result = cache.get(config_hash)?;
         
@@ -246,6 +310,9 @@ impl ConfigService {
             
             // Clean expired entries periodically
             cache.retain(|_, cached| !cached.is_expired());
+            
+            // Save to file after updating cache
+            self.save_cache_to_file(&cache);
         }
     }
 
@@ -255,18 +322,29 @@ impl ConfigService {
         if let Ok(mut cache) = CONNECTION_TEST_CACHE.lock() {
             cache.remove(&config_hash);
             println!("🗑️ Cleared cache for config hash: {}...", &config_hash[..8]);
+            
+            // Save to file after clearing cache
+            self.save_cache_to_file(&cache);
         }
     }
 
     /// Clear all cached results (utility method)
-    fn clear_all_cache(&self) {
+    pub fn clear_all_cache(&self) {
         if let Ok(mut cache) = CONNECTION_TEST_CACHE.lock() {
             let count = cache.len();
             cache.clear();
             println!("🗑️ Cleared all {} cached connection results", count);
+            
+            // Save to file after clearing all cache
+            self.save_cache_to_file(&cache);
         }
     }
 
+    /// Get cached connection test result for a specific configuration without performing a new test
+    pub async fn get_cached_connection_status(&self, config: &OSSConfig) -> Option<OSSConnectionTest> {
+        let config_hash = self.calculate_config_hash(config);
+        self.get_cached_test_result(&config_hash)
+    }
     /// Perform actual connection test using OSSService
     async fn perform_connection_test(&self, config: &OSSConfig) -> Result<OSSConnectionTest> {
         println!("🔄 Performing actual connection test for provider: {:?}", config.provider);
@@ -394,6 +472,10 @@ impl ConfigService {
 
     fn get_config_file_path(&self) -> PathBuf {
         self.config_dir.join(CONFIG_FILE_NAME)
+    }
+
+    fn get_cache_file_path(&self) -> PathBuf {
+        self.config_dir.join(CACHE_FILE_NAME)
     }
 
     fn derive_encryption_key() -> Result<[u8; 32]> {

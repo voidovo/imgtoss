@@ -102,6 +102,8 @@ export interface OSSConnectionTest {
   success: boolean;
   error?: string;
   latency?: number; // milliseconds
+  bucket_exists?: boolean; // Whether the specified bucket exists
+  available_buckets?: string[]; // List of available buckets (if accessible)
 }
 
 export interface ObjectInfo {
