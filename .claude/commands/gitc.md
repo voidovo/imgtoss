@@ -13,3 +13,9 @@ description: 创建 git 提交
 ## 您的任务
 
 基于上述更改，创建一个 git 提交，使用中文编写 commit 记录。
+
+## 要求
+
+1. 一定不要带上"Generated with Claude Code"
+
+2. 一定不要带上"Co-Authored-By: Claude noreply@anthropic.com"

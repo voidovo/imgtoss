@@ -392,11 +392,11 @@ export function HistoryRecords() {
                         onCheckedChange={handleSelectAll}
                       />
                     </TableHead>
-                    <TableHead className="text-center">文件</TableHead>
-                    <TableHead className="text-center">文件大小</TableHead>
-                    <TableHead className="text-center">上传时间</TableHead>
-                    <TableHead className="text-center">状态</TableHead>
-                    <TableHead className="text-center">复制链接</TableHead>
+                    <TableHead>文件</TableHead>
+                    <TableHead>文件大小</TableHead>
+                    <TableHead>上传时间</TableHead>
+                    <TableHead>状态</TableHead>
+                    <TableHead>复制链接</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>

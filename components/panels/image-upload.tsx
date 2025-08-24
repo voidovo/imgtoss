@@ -8,12 +8,9 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Progress } from "@/components/ui/progress"
 import { Badge } from "@/components/ui/badge"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import { tauriAPI } from "@/lib/tauri-api"
-import { historyOperations, configOperations } from "@/lib/tauri-api"
+import { convertFileSrc } from '@tauri-apps/api/core'
+import { tauriAPI, historyOperations, configOperations } from "@/lib/tauri-api"
 import type { OSSConfig, UploadResult, UploadProgress, HistoryRecord } from "@/lib/types"
 import { OSSProvider } from "@/lib/types"
 import { NotificationType } from "@/lib/types"
@@ -21,7 +18,7 @@ import { useProgressMonitoring } from "@/lib/hooks/use-progress-monitoring"
 import { NotificationSystem, ProgressNotificationCompact } from "@/components/ui/notification-system"
 import { FilenameDisplay } from "@/components/ui/filename-display"
 import { formatFileSizeHuman } from "@/lib/utils/format"
-import { getImageUploadProvider, setImageUploadProvider } from "@/lib/utils/user-preferences"
+import { getUserPreference, setUserPreference } from "@/lib/utils/user-preferences"
 
 // Provider display names
 const providerDisplayNames = {
@@ -33,29 +30,53 @@ const providerDisplayNames = {
 
 interface UploadFile {
   id: string
-  file: File
+  filePath: string
+  fileName: string
   preview: string
   status: "pending" | "uploading" | "success" | "error"
   progress: number
   url?: string
   error?: string
   size: string
-  path?: string // File path for Tauri API
+  fileSize: number
 }
 
 export default function ImageUpload() {
   const [files, setFiles] = useState<UploadFile[]>([])
   const [isDragging, setIsDragging] = useState(false)
-  const [selectedProvider, setSelectedProvider] = useState<OSSProvider>(OSSProvider.Aliyun)
-  const [availableProviders, setAvailableProviders] = useState<OSSProvider[]>([])
-  const [uploadPath, setUploadPath] = useState("images/")
   const [isUploading, setIsUploading] = useState(false)
   const [config, setConfig] = useState<OSSConfig | null>(null)
-  const [batchSize, setBatchSize] = useState(3)
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const progressInterval = useRef<NodeJS.Timeout | null>(null)
-  const [duplicateCheckEnabled, setDuplicateCheckEnabled] = useState(true)
   const [recentHistory, setRecentHistory] = useState<HistoryRecord[]>([])
+  
+  // 重复检测设置（从用户偏好设置加载）
+  const [duplicateCheckEnabled, setDuplicateCheckEnabled] = useState<boolean>(() => {
+    try {
+      console.log('[DuplicateCheck] 加载重复检测偏好设置')
+      const preference = getUserPreference('duplicateCheckEnabled')
+      const enabled = preference !== undefined ? preference : true // 默认启用
+      console.log('[DuplicateCheck] 重复检测状态:', enabled)
+      return enabled
+    } catch (error) {
+      console.error('[DuplicateCheck] 加载偏好设置失败:', error)
+      return true // 错误时默认启用
+    }
+  })
+  
+  // 简化的上传路径
+  const uploadPath = "images/"
+
+  // 更新重复检测设置
+  const updateDuplicateCheckEnabled = (enabled: boolean) => {
+    console.log('[DuplicateCheck] 更新重复检测状态为:', enabled)
+    setDuplicateCheckEnabled(enabled)
+    try {
+      setUserPreference('duplicateCheckEnabled', enabled)
+      console.log('[DuplicateCheck] 偏好设置保存成功')
+    } catch (error) {
+      console.error('[DuplicateCheck] 保存偏好设置失败:', error)
+    }
+  }
 
   // Progress monitoring hook
   const {
@@ -71,23 +92,12 @@ export default function ImageUpload() {
     retryUpload,
   } = useProgressMonitoring()
 
-  // Load OSS configuration and start progress monitoring on component mount
+  // 加载 OSS 配置和进度监控
   useEffect(() => {
     const loadConfig = async () => {
       try {
         const loadedConfig = await configOperations.loadOSSConfig()
         setConfig(loadedConfig)
-        if (loadedConfig) {
-          setAvailableProviders([loadedConfig.provider])
-          
-          // 尝试使用用户偏好设置，如果没有则使用配置的供应商
-          const preferredProvider = getImageUploadProvider()
-          if (preferredProvider && preferredProvider === loadedConfig.provider) {
-            setSelectedProvider(preferredProvider)
-          } else {
-            setSelectedProvider(loadedConfig.provider)
-          }
-        }
       } catch (error) {
         console.error("Failed to load OSS config:", error)
       }
@@ -95,7 +105,7 @@ export default function ImageUpload() {
 
     const loadRecentHistory = async () => {
       try {
-        // 获取最近5条成功的图片上传记录 (operation = "upload")
+        // 获取最近5条成功的图片上传记录
         const result = await historyOperations.searchHistory(
           undefined, // searchTerm
           "upload", // operationType
@@ -145,62 +155,140 @@ export default function ImageUpload() {
     )
   }, [uploadProgress])
 
+  // 清理错误和成功信息
+  const clearError = () => {
+    // 如果需要错误状态管理，可以在这里添加
+  }
+  
+  const clearSuccess = () => {
+    // 如果需要成功状态管理，可以在这里添加
+  }
+  
   const generateId = () => Math.random().toString(36).substr(2, 9)
 
-  const createUploadFile = (file: File): UploadFile => ({
+  // 创建上传文件对象（基于文件路径）
+  const createUploadFileFromPath = async (filePath: string): Promise<UploadFile> => {
+    const fileName = filePath.split(/[\\/]/).pop() || filePath
+    let fileSize = 0
+    
+    try {
+      // 尝试获取文件大小，如果失败则使用默认值
+      fileSize = await tauriAPI.getFileSize(filePath)
+    } catch (error) {
+      console.warn('Failed to get file size:', error)
+    }
+    
+    return {
+      id: generateId(),
+      filePath,
+      fileName,
+      preview: convertFileSrc(filePath), // 使用Tauri的convertFileSrc生成预览
+      status: "pending",
+      progress: 0,
+      size: formatFileSizeHuman(fileSize),
+      fileSize,
+    }
+  }
+  
+  // 创建上传文件对象（基于File对象，用于拖拽）
+  const createUploadFileFromFile = (file: File): UploadFile => ({
     id: generateId(),
-    file,
+    filePath: file.name, // 拖拽时只能获取文件名
+    fileName: file.name,
     preview: URL.createObjectURL(file),
     status: "pending",
     progress: 0,
     size: formatFileSizeHuman(file.size),
-    path: (file as any).path || file.name, // Use file path if available (Tauri file dialog)
+    fileSize: file.size,
   })
 
-  const handleFiles = useCallback(async (newFiles: FileList | File[]) => {
-    const fileArray = Array.from(newFiles)
-    const imageFiles = fileArray.filter((file) => file.type.startsWith("image/"))
+  // 使用Tauri文件对话框选择图片
+  const handleFileSelection = useCallback(async () => {
+    try {
+      clearError()
+      clearSuccess()
 
-    if (imageFiles.length !== fileArray.length) {
-      alert("只支持图片文件格式")
+      // 使用Tauri文件对话框选择图片
+      const { open } = await import('@tauri-apps/plugin-dialog')
+
+        const selected = await open({
+          multiple: true,
+          filters: [{
+            name: 'Image Files',
+            extensions: ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'ico']
+          }]
+        })
+
+        if (selected && Array.isArray(selected)) {
+          const uploadFiles = await Promise.all(selected.map(createUploadFileFromPath))
+          await handleFiles(uploadFiles)
+        } else if (selected) {
+          const uploadFile = await createUploadFileFromPath(selected)
+          await handleFiles([uploadFile])
+        }
+    } catch (error) {
+      console.error('Failed to select files:', error)
+      alert(`文件选择失败: ${error}`)
     }
+  }, [])
 
-    const uploadFiles = imageFiles.map(createUploadFile)
+  const handleFiles = useCallback(async (uploadFiles: UploadFile[]) => {
 
-    // 如果启用了重复检测，立即检查新添加的文件
+    // 如果启用了重复检测，进行哈希值检测
+    console.log('[DuplicateCheck] Checking if duplicate detection is enabled:', duplicateCheckEnabled)
+    console.log('[DuplicateCheck] Number of upload files:', uploadFiles.length)
+    
     if (duplicateCheckEnabled && uploadFiles.length > 0) {
+      console.log('[DuplicateCheck] Starting hash-based duplicate detection')
+      
       try {
-        // 获取文件路径进行重复检测
-        const filePaths = uploadFiles.map(f => f.path || f.file.name)
+        // 获取文件路径用于重复检测
+        const filePaths = uploadFiles.map(f => f.filePath)
+        console.log('[DuplicateCheck] File paths for duplicate check:', filePaths)
+        
+        // 调用后端批量重复检测
+        console.log('[DuplicateCheck] Calling tauriAPI.checkDuplicatesBatch...')
         const duplicateResults = await tauriAPI.checkDuplicatesBatch(filePaths)
+        console.log('[DuplicateCheck] Duplicate check results:', duplicateResults)
 
         // 标记重复的文件
         const filesWithDuplicateStatus = uploadFiles.map((file, index) => {
           const duplicateResult = duplicateResults[index]
+          console.log(`[DuplicateCheck] Processing file ${index}: ${file.fileName}, duplicate result:`, duplicateResult)
+          
           if (duplicateResult?.is_duplicate) {
+            console.log(`[DuplicateCheck] File ${file.fileName} is marked as duplicate`)
             return {
               ...file,
               status: "error" as const,
               error: `重复图片 - 已存在: ${duplicateResult.existing_url || '未知链接'}`
             }
           }
+          console.log(`[DuplicateCheck] File ${file.fileName} is not duplicate`)
           return file
         })
 
+        console.log('[DuplicateCheck] Files with duplicate status:', filesWithDuplicateStatus)
         setFiles((prev) => [...prev, ...filesWithDuplicateStatus])
 
         // 如果有重复文件，显示提示
         const duplicateCount = duplicateResults.filter(r => r.is_duplicate).length
+        console.log('[DuplicateCheck] Total duplicate files found:', duplicateCount)
+        
         if (duplicateCount > 0) {
+          console.log('[DuplicateCheck] Showing duplicate files alert')
           alert(`检测到 ${duplicateCount} 个重复图片，已自动标记。您可以选择移除这些重复文件。`)
         }
       } catch (error) {
-        console.error("重复检测失败:", error)
+        console.error("[DuplicateCheck] Duplicate detection failed with error:", error)
+        
         // 如果检测失败，仍然添加文件但显示警告
+        console.log('[DuplicateCheck] Adding files despite detection failure')
         setFiles((prev) => [...prev, ...uploadFiles])
-        alert("重复检测失败，文件已添加但建议手动检查是否重复")
+        alert(`重复检测失败: ${error}。文件已添加但建议手动检查是否重复。`)
       }
     } else {
+      console.log('[DuplicateCheck] Duplicate detection disabled or no files, adding files directly')
       // 如果未启用重复检测，直接添加文件
       setFiles((prev) => [...prev, ...uploadFiles])
     }
@@ -217,19 +305,40 @@ export default function ImageUpload() {
   }, [])
 
   const handleDrop = useCallback(
-    (e: React.DragEvent) => {
+    async (e: React.DragEvent) => {
       e.preventDefault()
       setIsDragging(false)
-      const droppedFiles = e.dataTransfer.files
-      handleFiles(droppedFiles)
+      const droppedFiles = Array.from(e.dataTransfer.files)
+      
+      // 过滤图片文件
+      const imageFiles = droppedFiles.filter((file: File) => file.type.startsWith("image/"))
+      if (imageFiles.length !== droppedFiles.length) {
+        alert("只支持图片文件格式")
+      }
+      
+      if (imageFiles.length > 0) {
+        // 使用File对象创建上传文件（拖拽时只能获取文件名）
+        const uploadFiles = imageFiles.map(createUploadFileFromFile)
+        await handleFiles(uploadFiles)
+      }
     },
     [handleFiles],
   )
 
   const handleFileSelect = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>) => {
+    async (e: React.ChangeEvent<HTMLInputElement>) => {
       if (e.target.files) {
-        handleFiles(e.target.files)
+        const fileArray = Array.from(e.target.files)
+        const imageFiles = fileArray.filter((file: File) => file.type.startsWith("image/"))
+        
+        if (imageFiles.length !== fileArray.length) {
+          alert("只支持图片文件格式")
+        }
+        
+        if (imageFiles.length > 0) {
+          const uploadFiles = imageFiles.map(createUploadFileFromFile)
+          await handleFiles(uploadFiles)
+        }
       }
     },
     [handleFiles],
@@ -272,19 +381,25 @@ export default function ImageUpload() {
         )
       )
 
-      // Get file paths for upload
-      const imagePaths = filesToUpload.map(f => f.path || f.file.name)
+      // 在桌面环境中，直接使用文件路径
+      const imagePaths = filesToUpload.map(f => f.filePath)
 
-      // Use batch upload for better performance
-      const results = await tauriAPI.uploadImagesBatch(imagePaths, config, batchSize)
+      // 使用upload_images接口（与文章上传保持一致）
+      const results = await tauriAPI.uploadImages(imagePaths, config)
 
-      // Update files with results
+      // 基于文件路径匹配结果
       setFiles(prev =>
         prev.map(file => {
           const uploadFile = filesToUpload.find(f => f.id === file.id)
           if (!uploadFile) return file
 
-          const result = results.find(r => r.image_id === file.id)
+          // 通过文件路径匹配结果
+          const result = results.find(r => 
+            r.image_id === uploadFile.filePath || 
+            r.image_id === uploadFile.fileName ||
+            uploadFile.filePath.endsWith(r.image_id)
+          )
+          
           if (result) {
             return {
               ...file,
@@ -300,15 +415,39 @@ export default function ImageUpload() {
 
     } catch (error) {
       console.error("Upload failed:", error)
+      
+      // Parse error message to provide more specific feedback
+      let errorMessage = "上传失败"
+      if (error instanceof Error) {
+        if (error.message.includes('network') || error.message.includes('connection')) {
+          errorMessage = "网络连接失败，请检查网络连接"
+        } else if (error.message.includes('storage') || error.message.includes('bucket')) {
+          errorMessage = "存储服务配置错误，请检查存储配置"
+        } else if (error.message.includes('permission') || error.message.includes('access')) {
+          errorMessage = "存储访问权限不足，请检查访问密钥"
+        } else if (error.message.includes('timeout')) {
+          errorMessage = "上传超时，请稍后重试"
+        } else if (error.message.includes('size') || error.message.includes('large')) {
+          errorMessage = "文件过大，请选择较小的文件"
+        } else if (error.message.includes('not found') || error.message.includes('file not found')) {
+          errorMessage = "文件未找到，请确认文件存在"
+        } else {
+          errorMessage = `上传失败: ${error.message}`
+        }
+      }
 
-      // Mark all uploading files as failed
+      // Mark all uploading files as failed with specific error
       setFiles(prev =>
         prev.map(f =>
           filesToUpload.some(upload => upload.id === f.id)
-            ? { ...f, status: "error" as const, error: String(error) }
+            ? { ...f, status: "error" as const, error: errorMessage }
             : f
         )
       )
+      
+      // Send notification about the failure - use alert for now
+      console.error("Upload error details:", errorMessage)
+      alert(`${errorMessage}。请检查错误并重试。`)
     } finally {
       setIsUploading(false)
     }
@@ -320,7 +459,10 @@ export default function ImageUpload() {
     if (pendingFiles.length === 0) {
       const errorFiles = files.filter((f) => f.status === "error")
       if (errorFiles.length > 0) {
+        // Use alert instead of notification system for now
         alert("没有可上传的文件。请移除重复或错误的文件后重试。")
+      } else {
+        alert("请先选择要上传的图片文件。")
       }
       return
     }
@@ -358,13 +500,7 @@ export default function ImageUpload() {
       )
     } catch (error) {
       console.error("Failed to retry upload:", error)
-      await sendNotification({
-        type: NotificationType.Error,
-        title: "Retry Failed",
-        message: `Failed to retry upload for ${file.file.name}`,
-        dismissible: true,
-        auto_dismiss: false,
-      })
+      alert(`重试上传文件 ${file.fileName} 失败`)
     }
   }
 
@@ -376,13 +512,13 @@ export default function ImageUpload() {
 
   const removeDuplicateFiles = () => {
     setFiles(prev => {
-      const filesToRemove = prev.filter(f => f.status === "error" && f.error?.includes("重复图片"))
+      const filesToRemove = prev.filter(f => f.status === "error" && f.error?.includes("重复"))
       filesToRemove.forEach(file => {
         if (file.preview) {
           URL.revokeObjectURL(file.preview)
         }
       })
-      return prev.filter(f => !(f.status === "error" && f.error?.includes("重复图片")))
+      return prev.filter(f => !(f.status === "error" && f.error?.includes("重复")))
     })
   }
 
@@ -416,11 +552,6 @@ export default function ImageUpload() {
     }
   }
 
-  const handleProviderChange = (provider: OSSProvider) => {
-    setSelectedProvider(provider)
-    setImageUploadProvider(provider)
-  }
-
   const totalFiles = files.length
   const successFiles = files.filter((f) => f.status === "success").length
   const errorFiles = files.filter((f) => f.status === "error").length
@@ -433,24 +564,6 @@ export default function ImageUpload() {
         <div>
           <h1 className="text-2xl font-bold text-gray-900 dark:text-white">图片上传</h1>
           <p className="text-gray-600 dark:text-gray-400">批量上传图片到对象存储</p>
-        </div>
-        <div className="flex items-center gap-3">
-          <Select
-            value={selectedProvider}
-            onValueChange={(value) => handleProviderChange(value as OSSProvider)}
-            disabled={!config || availableProviders.length === 0}
-          >
-            <SelectTrigger className="w-40">
-              <SelectValue placeholder="选择供应商" />
-            </SelectTrigger>
-            <SelectContent>
-              {availableProviders.map((provider) => (
-                <SelectItem key={provider} value={provider}>
-                  {providerDisplayNames[provider]}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
         </div>
       </div>
 
@@ -483,7 +596,7 @@ export default function ImageUpload() {
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
                 <div>
                   <span className="font-medium text-gray-600 dark:text-gray-400">当前供应商:</span>
-                  <div className="mt-1">{providerDisplayNames[selectedProvider]}</div>
+                  <div className="mt-1">{providerDisplayNames[config.provider]}</div>
                 </div>
                 <div>
                   <span className="font-medium text-gray-600 dark:text-gray-400">存储桶:</span>
@@ -496,66 +609,6 @@ export default function ImageUpload() {
               </div>
             </div>
           )}
-          
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <div>
-              <Label htmlFor="upload-path">上传路径</Label>
-              <Input
-                id="upload-path"
-                value={uploadPath}
-                onChange={(e) => setUploadPath(e.target.value)}
-                placeholder="images/"
-              />
-            </div>
-            <div>
-              <Label>存储提供商</Label>
-              <Select
-                value={selectedProvider}
-                onValueChange={(value) => handleProviderChange(value as OSSProvider)}
-                disabled={!config || availableProviders.length === 0}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="选择供应商" />
-                </SelectTrigger>
-                <SelectContent>
-                  {availableProviders.map((provider) => (
-                    <SelectItem key={provider} value={provider}>
-                      {providerDisplayNames[provider]}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div>
-              <Label htmlFor="batch-size">批量大小</Label>
-              <Select value={batchSize.toString()} onValueChange={(value) => setBatchSize(parseInt(value))}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="1">1 (单个)</SelectItem>
-                  <SelectItem value="3">3 (推荐)</SelectItem>
-                  <SelectItem value="5">5</SelectItem>
-                  <SelectItem value="10">10 (最大)</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div>
-              <Label htmlFor="duplicate-check">重复检测</Label>
-              <Select
-                value={duplicateCheckEnabled ? "enabled" : "disabled"}
-                onValueChange={(value) => setDuplicateCheckEnabled(value === "enabled")}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="enabled">启用</SelectItem>
-                  <SelectItem value="disabled">禁用</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
 
           {!config && (
             <div className="p-3 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg">
@@ -583,9 +636,8 @@ export default function ImageUpload() {
             <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-2">拖拽图片到此处或点击选择</h3>
             <p className="text-gray-600 dark:text-gray-400 mb-4">
               支持 JPG、PNG、GIF、WebP 格式，单个文件最大 10MB
-              {duplicateCheckEnabled && <span className="block text-sm text-blue-600 mt-1">✓ 已启用重复检测</span>}
             </p>
-            <Button onClick={() => fileInputRef.current?.click()}>选择图片</Button>
+            <Button onClick={handleFileSelection}>选择图片</Button>
             <input
               ref={fileInputRef}
               type="file"
@@ -654,7 +706,7 @@ export default function ImageUpload() {
                 >
                   {isUploading ? "上传中..." : "开始上传"}
                 </Button>
-                {files.some(f => f.status === "error" && f.error?.includes("重复图片")) && (
+                {files.some(f => f.status === "error" && f.error?.includes("重复")) && (
                   <Button variant="outline" onClick={removeDuplicateFiles}>
                     <AlertCircle className="h-4 w-4 mr-2" />
                     移除重复
@@ -679,13 +731,13 @@ export default function ImageUpload() {
                 <div key={file.id} className="flex items-center gap-4 p-3 border rounded-lg">
                   <img
                     src={file.preview || "/placeholder.svg"}
-                    alt={file.file.name}
+                    alt={file.fileName}
                     className="w-12 h-12 object-cover rounded"
                   />
                   <div className="flex-1 min-w-0">
                     <div className="font-medium text-gray-900 dark:text-white">
                       <FilenameDisplay 
-                        filePath={file.file.name}
+                        filePath={file.fileName}
                         maxLength={25}
                         showTooltip={true}
                       />
