@@ -442,7 +442,12 @@ impl HistoryService {
     pub async fn get_statistics(&self) -> Result<HistoryStatistics, AppError> {
         let records = self.load_history_records().await?;
         
-        if records.is_empty() {
+        // 只统计上传操作
+        let upload_records: Vec<_> = records.into_iter()
+            .filter(|r| matches!(r.operation, OperationType::Upload))
+            .collect();
+        
+        if upload_records.is_empty() {
             return Ok(HistoryStatistics {
                 total_records: 0,
                 successful_operations: 0,
@@ -457,13 +462,13 @@ impl HistoryService {
             });
         }
         
-        let total_records = records.len();
-        let successful_operations = records.iter().filter(|r| r.success).count();
+        let total_records = upload_records.len();
+        let successful_operations = upload_records.iter().filter(|r| r.success).count();
         let failed_operations = total_records - successful_operations;
         let success_rate = (successful_operations as f64 / total_records as f64) * 100.0;
         
         let mut operations_by_type = HashMap::new();
-        for record in &records {
+        for record in &upload_records {
             let op_name = match record.operation {
                 OperationType::Upload => "upload",
                 OperationType::Replace => "replace",
@@ -474,18 +479,18 @@ impl HistoryService {
             *operations_by_type.entry(op_name.to_string()).or_insert(0) += 1;
         }
         
-        let total_images_processed = records.iter().map(|r| r.image_count).sum();
-        let total_size_processed = records.iter().filter_map(|r| r.total_size).sum();
+        let total_images_processed = upload_records.iter().map(|r| r.image_count).sum();
+        let total_size_processed = upload_records.iter().filter_map(|r| r.total_size).sum();
         
-        let durations: Vec<u64> = records.iter().filter_map(|r| r.duration).collect();
+        let durations: Vec<u64> = upload_records.iter().filter_map(|r| r.duration).collect();
         let average_duration = if durations.is_empty() {
             0.0
         } else {
             durations.iter().sum::<u64>() as f64 / durations.len() as f64
         };
         
-        let oldest_record = records.iter().map(|r| r.timestamp).min();
-        let newest_record = records.iter().map(|r| r.timestamp).max();
+        let oldest_record = upload_records.iter().map(|r| r.timestamp).min();
+        let newest_record = upload_records.iter().map(|r| r.timestamp).max();
         
         Ok(HistoryStatistics {
             total_records,
