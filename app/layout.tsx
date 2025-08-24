@@ -9,7 +9,7 @@ const inter = Inter({ subsets: ["latin"] })
 export const metadata = {
   title: "imgtoss - 图像上传管理工具",
   description: "自动化上传图像至对象存储的跨平台应用",
-    generator: 'v0.app'
+  generator: 'v0.app'
 }
 
 export default function RootLayout({

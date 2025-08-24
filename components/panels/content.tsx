@@ -1,7 +1,7 @@
 "use client"
 
 import React, { useState, useCallback, useEffect } from "react"
-import { FileText, Upload, CheckCircle, AlertCircle, FolderOpen, Image, Copy } from "lucide-react"
+import { FileText, Upload, CheckCircle, AlertCircle, FolderOpen, Image, Copy, Settings } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -14,17 +14,26 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Checkbox } from "@/components/ui/checkbox"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Progress } from "@/components/ui/progress"
 import { convertFileSrc } from '@tauri-apps/api/core'
 import { tauriAPI } from "@/lib/tauri-api"
-import { historyOperations } from "@/lib/tauri-api"
+import { configOperations, historyOperations } from "@/lib/tauri-api"
 import { FilenameDisplay } from "@/components/ui/filename-display"
 import { formatFileSizeHuman } from "@/lib/utils/format"
+import { getArticleUploadProvider, setArticleUploadProvider } from "@/lib/utils/user-preferences"
 import type { ScanResult, ImageReference, LinkReplacement, OSSConfig, HistoryRecord } from "@/lib/types"
-import { useSystemHealth } from "@/lib/hooks/use-progress-monitoring"
-import { SystemHealthMonitor, SystemHealthIndicator } from "@/components/ui/system-health-monitor"
+import { OSSProvider } from "@/lib/types"
+
+// Provider display names
+const providerDisplayNames = {
+  [OSSProvider.Aliyun]: "阿里云 OSS",
+  [OSSProvider.Tencent]: "腾讯云 COS", 
+  [OSSProvider.AWS]: "Amazon S3",
+  [OSSProvider.Custom]: "自定义 S3"
+}
 
 interface ProcessingState {
   selectedFiles: string[]
@@ -39,7 +48,6 @@ interface ProcessingState {
 
 export default function Content() {
   const [showImageModal, setShowImageModal] = useState(false)
-  const [showHealthModal, setShowHealthModal] = useState(false)
   const [state, setState] = useState<ProcessingState>({
     selectedFiles: [],
     scanResults: [],
@@ -52,15 +60,29 @@ export default function Content() {
   })
 
   const [ossConfig, setOssConfig] = useState<OSSConfig | null>(null)
+  const [selectedProvider, setSelectedProvider] = useState<OSSProvider>(OSSProvider.Aliyun)
+  const [availableProviders, setAvailableProviders] = useState<OSSProvider[]>([])
   const [recentHistory, setRecentHistory] = useState<HistoryRecord[]>([])
-  const { health, isLoading: healthLoading, refreshHealth } = useSystemHealth()
 
   // Load OSS config and recent history on component mount
   React.useEffect(() => {
     const loadConfig = async () => {
       try {
-        const config = await tauriAPI.loadOSSConfig()
+        const config = await configOperations.loadOSSConfig()
         setOssConfig(config)
+        
+        // 设置可用的供应商列表（目前只有当前配置的供应商）
+        if (config) {
+          setAvailableProviders([config.provider])
+          
+          // 尝试使用用户偏好设置，如果没有则使用配置的供应商
+          const preferredProvider = getArticleUploadProvider()
+          if (preferredProvider && preferredProvider === config.provider) {
+            setSelectedProvider(preferredProvider)
+          } else {
+            setSelectedProvider(config.provider)
+          }
+        }
       } catch (error) {
         console.error("Failed to load OSS config:", error)
       }
@@ -98,6 +120,11 @@ export default function Content() {
     } catch (error) {
       console.error('Failed to copy to clipboard:', error)
     }
+  }
+
+  const handleProviderChange = (provider: OSSProvider) => {
+    setSelectedProvider(provider)
+    setArticleUploadProvider(provider)
   }
 
   // Get all detected images from scan results
@@ -302,13 +329,8 @@ export default function Content() {
         </Alert>
       )}
 
-      {/* System Health Indicator */}
       <div className="flex justify-between items-center">
         <h1 className="text-2xl font-bold">Dashboard</h1>
-        <SystemHealthIndicator 
-          health={health} 
-          onClick={() => setShowHealthModal(true)}
-        />
       </div>
 
       <div className="grid grid-cols-1 gap-6">
@@ -321,6 +343,40 @@ export default function Content() {
             <CardDescription>选择 Markdown 文件，自动检测并上传本地图片到对象存储</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
+              {/* Storage Provider Selection */}
+              {ossConfig && availableProviders.length > 0 && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-4 bg-gray-50 dark:bg-gray-800/50 rounded-lg">
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                      存储供应商
+                    </label>
+                    <Select
+                      value={selectedProvider}
+                      onValueChange={(value) => handleProviderChange(value as OSSProvider)}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="选择存储供应商" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {availableProviders.map((provider) => (
+                          <SelectItem key={provider} value={provider}>
+                            {providerDisplayNames[provider]}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                      存储桶
+                    </label>
+                    <div className="p-2 bg-white dark:bg-gray-700 border rounded text-sm">
+                      {ossConfig.bucket}
+                    </div>
+                  </div>
+                </div>
+              )}
+
               <div className="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg p-8 text-center">
                 <Upload className="h-12 w-12 mx-auto text-gray-400 mb-4" />
                 <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
@@ -367,11 +423,28 @@ export default function Content() {
               )}
 
               {/* OSS Configuration Status */}
-              {!ossConfig && detectedImages.length > 0 && (
+              {!ossConfig && (
+                <Alert>
+                  <Settings className="h-4 w-4" />
+                  <AlertDescription className="flex items-center justify-between">
+                    <span>未找到 OSS 配置。请先配置您的对象存储设置。</span>
+                    <Button 
+                      size="sm" 
+                      variant="outline"
+                      onClick={() => window.location.href = '/storage'}
+                    >
+                      配置存储
+                    </Button>
+                  </AlertDescription>
+                </Alert>
+              )}
+
+              {/* OSS Configuration Status for detected images */}
+              {ossConfig && detectedImages.length > 0 && !availableProviders.includes(selectedProvider) && (
                 <Alert>
                   <AlertCircle className="h-4 w-4" />
                   <AlertDescription>
-                    未找到 OSS 配置。请先在存储配置页面配置您的对象存储设置。
+                    选中的存储供应商配置无效。请重新选择或配置存储设置。
                   </AlertDescription>
                 </Alert>
               )}
@@ -450,69 +523,6 @@ export default function Content() {
             </CardContent>
           </Card>
       </div>
-
-      {/* Recent Upload History */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-lg">最近上传记录</CardTitle>
-          <CardDescription>显示最近的文章上传记录</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-3">
-            {recentHistory.length > 0 ? (
-              recentHistory.map((record) => (
-                <div key={record.id} className="flex items-center justify-between p-3 border rounded-lg">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 bg-gray-200 dark:bg-gray-700 rounded flex items-center justify-center">
-                      <Image className="h-5 w-5 text-gray-500" />
-                    </div>
-                    <div>
-                      <p className="font-medium text-sm">
-                        <FilenameDisplay 
-                          filePath={record.files.length > 0 ? record.files[0] : 'Unknown file'}
-                          maxLength={25}
-                          showTooltip={true}
-                        />
-                        {record.files.length > 1 && (
-                          <span className="text-xs text-gray-500 ml-1">
-                            +{record.files.length - 1}个文件
-                          </span>
-                        )}
-                      </p>
-                      <p className="text-xs text-gray-500">
-                        {new Date(record.timestamp).toLocaleString()}
-                      </p>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Badge 
-                      variant={record.success ? "default" : "destructive"}
-                      className={record.success ? "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200" : ""}
-                    >
-                      {record.success ? "已上传" : "失败"}
-                    </Badge>
-                    {record.success && record.metadata?.uploaded_url && (
-                      <Button 
-                        variant="outline" 
-                        size="sm"
-                        onClick={() => copyToClipboard(record.metadata.uploaded_url)}
-                      >
-                        <Copy className="h-3 w-3 mr-1" />
-                        复制链接
-                      </Button>
-                    )}
-                  </div>
-                </div>
-              ))
-            ) : (
-              <div className="text-center py-8 text-gray-500">
-                <Image className="h-12 w-12 mx-auto mb-2 text-gray-300" />
-                <p>暂无上传记录</p>
-              </div>
-            )}
-          </div>
-        </CardContent>
-      </Card>
 
       <Card>
         <CardHeader>
@@ -668,29 +678,6 @@ export default function Content() {
         </DialogContent>
       </Dialog>
 
-      {/* System Health Modal */}
-      <Dialog open={showHealthModal} onOpenChange={setShowHealthModal}>
-        <DialogContent className="max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>System Health Monitor</DialogTitle>
-            <DialogDescription>
-              Monitor system performance and health status
-            </DialogDescription>
-          </DialogHeader>
-          
-          <SystemHealthMonitor
-            health={health}
-            isLoading={healthLoading}
-            onRefresh={refreshHealth}
-          />
-          
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowHealthModal(false)}>
-              Close
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   )
 }

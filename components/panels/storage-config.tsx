@@ -477,7 +477,7 @@ export function StorageConfig() {
             </div>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-4 text-sm text-center">
               <div>
                 <Label className="text-xs text-muted-foreground">存储桶</Label>
                 <p className="font-mono">{state.config.bucket}</p>

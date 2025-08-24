@@ -3,7 +3,7 @@
 import type React from "react"
 
 import { useState, useCallback, useRef, useEffect } from "react"
-import { Upload, X, ImageIcon, CheckCircle, AlertCircle, Trash2, Eye, Copy, RefreshCw, Image, Calendar } from "lucide-react"
+import { Upload, X, ImageIcon, CheckCircle, AlertCircle, Trash2, Eye, Copy, RefreshCw, Image, Calendar, Settings } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Progress } from "@/components/ui/progress"
@@ -11,14 +11,25 @@ import { Badge } from "@/components/ui/badge"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Alert, AlertDescription } from "@/components/ui/alert"
 import { tauriAPI } from "@/lib/tauri-api"
-import { historyOperations } from "@/lib/tauri-api"
+import { historyOperations, configOperations } from "@/lib/tauri-api"
 import type { OSSConfig, UploadResult, UploadProgress, HistoryRecord } from "@/lib/types"
+import { OSSProvider } from "@/lib/types"
 import { NotificationType } from "@/lib/types"
 import { useProgressMonitoring } from "@/lib/hooks/use-progress-monitoring"
 import { NotificationSystem, ProgressNotificationCompact } from "@/components/ui/notification-system"
 import { FilenameDisplay } from "@/components/ui/filename-display"
 import { formatFileSizeHuman } from "@/lib/utils/format"
+import { getImageUploadProvider, setImageUploadProvider } from "@/lib/utils/user-preferences"
+
+// Provider display names
+const providerDisplayNames = {
+  [OSSProvider.Aliyun]: "阿里云 OSS",
+  [OSSProvider.Tencent]: "腾讯云 COS", 
+  [OSSProvider.AWS]: "Amazon S3",
+  [OSSProvider.Custom]: "自定义 S3"
+}
 
 interface UploadFile {
   id: string
@@ -35,7 +46,8 @@ interface UploadFile {
 export default function ImageUpload() {
   const [files, setFiles] = useState<UploadFile[]>([])
   const [isDragging, setIsDragging] = useState(false)
-  const [storageProvider, setStorageProvider] = useState("Aliyun")
+  const [selectedProvider, setSelectedProvider] = useState<OSSProvider>(OSSProvider.Aliyun)
+  const [availableProviders, setAvailableProviders] = useState<OSSProvider[]>([])
   const [uploadPath, setUploadPath] = useState("images/")
   const [isUploading, setIsUploading] = useState(false)
   const [config, setConfig] = useState<OSSConfig | null>(null)
@@ -63,10 +75,18 @@ export default function ImageUpload() {
   useEffect(() => {
     const loadConfig = async () => {
       try {
-        const loadedConfig = await tauriAPI.loadOSSConfig()
+        const loadedConfig = await configOperations.loadOSSConfig()
         setConfig(loadedConfig)
         if (loadedConfig) {
-          setStorageProvider(loadedConfig.provider)
+          setAvailableProviders([loadedConfig.provider])
+          
+          // 尝试使用用户偏好设置，如果没有则使用配置的供应商
+          const preferredProvider = getImageUploadProvider()
+          if (preferredProvider && preferredProvider === loadedConfig.provider) {
+            setSelectedProvider(preferredProvider)
+          } else {
+            setSelectedProvider(loadedConfig.provider)
+          }
         }
       } catch (error) {
         console.error("Failed to load OSS config:", error)
@@ -396,6 +416,11 @@ export default function ImageUpload() {
     }
   }
 
+  const handleProviderChange = (provider: OSSProvider) => {
+    setSelectedProvider(provider)
+    setImageUploadProvider(provider)
+  }
+
   const totalFiles = files.length
   const successFiles = files.filter((f) => f.status === "success").length
   const errorFiles = files.filter((f) => f.status === "error").length
@@ -410,18 +435,41 @@ export default function ImageUpload() {
           <p className="text-gray-600 dark:text-gray-400">批量上传图片到对象存储</p>
         </div>
         <div className="flex items-center gap-3">
-          <Select value={storageProvider} onValueChange={setStorageProvider}>
-            <SelectTrigger className="w-32">
-              <SelectValue />
+          <Select
+            value={selectedProvider}
+            onValueChange={(value) => handleProviderChange(value as OSSProvider)}
+            disabled={!config || availableProviders.length === 0}
+          >
+            <SelectTrigger className="w-40">
+              <SelectValue placeholder="选择供应商" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="aliyun">阿里云 OSS</SelectItem>
-              <SelectItem value="tencent">腾讯云 COS</SelectItem>
-              <SelectItem value="aws">Amazon S3</SelectItem>
+              {availableProviders.map((provider) => (
+                <SelectItem key={provider} value={provider}>
+                  {providerDisplayNames[provider]}
+                </SelectItem>
+              ))}
             </SelectContent>
           </Select>
         </div>
       </div>
+
+      {/* OSS Configuration Status */}
+      {!config && (
+        <Alert>
+          <Settings className="h-4 w-4" />
+          <AlertDescription className="flex items-center justify-between">
+            <span>未找到 OSS 配置。请先配置您的对象存储设置。</span>
+            <Button 
+              size="sm" 
+              variant="outline"
+              onClick={() => window.location.href = '/storage'}
+            >
+              配置存储
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
 
       {/* Upload Configuration */}
       <Card>
@@ -429,6 +477,26 @@ export default function ImageUpload() {
           <CardTitle className="text-lg">上传配置</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
+          {/* Storage Provider Info */}
+          {config && (
+            <div className="p-4 bg-gray-50 dark:bg-gray-800/50 rounded-lg">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+                <div>
+                  <span className="font-medium text-gray-600 dark:text-gray-400">当前供应商:</span>
+                  <div className="mt-1">{providerDisplayNames[selectedProvider]}</div>
+                </div>
+                <div>
+                  <span className="font-medium text-gray-600 dark:text-gray-400">存储桶:</span>
+                  <div className="mt-1 font-mono">{config.bucket}</div>
+                </div>
+                <div>
+                  <span className="font-medium text-gray-600 dark:text-gray-400">区域:</span>
+                  <div className="mt-1">{config.region || '默认'}</div>
+                </div>
+              </div>
+            </div>
+          )}
+          
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
             <div>
               <Label htmlFor="upload-path">上传路径</Label>
@@ -441,14 +509,20 @@ export default function ImageUpload() {
             </div>
             <div>
               <Label>存储提供商</Label>
-              <Select value={storageProvider} onValueChange={setStorageProvider}>
+              <Select
+                value={selectedProvider}
+                onValueChange={(value) => handleProviderChange(value as OSSProvider)}
+                disabled={!config || availableProviders.length === 0}
+              >
                 <SelectTrigger>
-                  <SelectValue />
+                  <SelectValue placeholder="选择供应商" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="Aliyun">阿里云 OSS</SelectItem>
-                  <SelectItem value="Tencent">腾讯云 COS</SelectItem>
-                  <SelectItem value="AWS">Amazon S3</SelectItem>
+                  {availableProviders.map((provider) => (
+                    <SelectItem key={provider} value={provider}>
+                      {providerDisplayNames[provider]}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>
