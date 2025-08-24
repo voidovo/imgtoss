@@ -1,7 +1,7 @@
 "use client"
 
-import React, { useState, useCallback } from "react"
-import { FileText, Upload, CheckCircle, AlertCircle, FolderOpen, Image } from "lucide-react"
+import React, { useState, useCallback, useEffect } from "react"
+import { FileText, Upload, CheckCircle, AlertCircle, FolderOpen, Image, Copy } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -19,9 +19,10 @@ import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Progress } from "@/components/ui/progress"
 import { convertFileSrc } from '@tauri-apps/api/core'
 import { tauriAPI } from "@/lib/tauri-api"
+import { historyOperations } from "@/lib/tauri-api"
 import { FilenameDisplay } from "@/components/ui/filename-display"
 import { formatFileSizeHuman } from "@/lib/utils/format"
-import type { ScanResult, ImageReference, LinkReplacement, OSSConfig } from "@/lib/types"
+import type { ScanResult, ImageReference, LinkReplacement, OSSConfig, HistoryRecord } from "@/lib/types"
 import { useSystemHealth } from "@/lib/hooks/use-progress-monitoring"
 import { SystemHealthMonitor, SystemHealthIndicator } from "@/components/ui/system-health-monitor"
 
@@ -51,9 +52,10 @@ export default function Content() {
   })
 
   const [ossConfig, setOssConfig] = useState<OSSConfig | null>(null)
+  const [recentHistory, setRecentHistory] = useState<HistoryRecord[]>([])
   const { health, isLoading: healthLoading, refreshHealth } = useSystemHealth()
 
-  // Load OSS config on component mount
+  // Load OSS config and recent history on component mount
   React.useEffect(() => {
     const loadConfig = async () => {
       try {
@@ -63,11 +65,40 @@ export default function Content() {
         console.error("Failed to load OSS config:", error)
       }
     }
+    
+    const loadRecentHistory = async () => {
+      try {
+        // 获取最近3条成功的文章上传记录 (operation = "replace")
+        const result = await historyOperations.searchHistory(
+          undefined, // searchTerm
+          "replace", // operationType
+          true, // successOnly
+          undefined, // startDate
+          undefined, // endDate
+          1, // page
+          3 // pageSize
+        )
+        setRecentHistory(result.items || [])
+      } catch (error) {
+        console.error("Failed to load recent history:", error)
+      }
+    }
+    
     loadConfig()
+    loadRecentHistory()
   }, [])
 
   const clearError = () => setState(prev => ({ ...prev, error: null }))
   const clearSuccess = () => setState(prev => ({ ...prev, successMessage: null }))
+
+  const copyToClipboard = async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text)
+      // 可以在这里添加 toast 提示
+    } catch (error) {
+      console.error('Failed to copy to clipboard:', error)
+    }
+  }
 
   // Get all detected images from scan results
   const detectedImages = state.scanResults.flatMap(result => result.images).filter(img => img.exists)
@@ -280,17 +311,16 @@ export default function Content() {
         />
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2">
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <FileText className="h-5 w-5" />
-                文章上传模式
-              </CardTitle>
-              <CardDescription>选择 Markdown 文件，自动检测并上传本地图片到对象存储</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
+      <div className="grid grid-cols-1 gap-6">
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <FileText className="h-5 w-5" />
+              文章上传模式
+            </CardTitle>
+            <CardDescription>选择 Markdown 文件，自动检测并上传本地图片到对象存储</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
               <div className="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg p-8 text-center">
                 <Upload className="h-12 w-12 mx-auto text-gray-400 mb-4" />
                 <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
@@ -419,59 +449,70 @@ export default function Content() {
               )}
             </CardContent>
           </Card>
-        </div>
-
-        <div className="space-y-6">
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">上传统计</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-4">
-                <div className="flex justify-between">
-                  <span className="text-sm text-gray-600 dark:text-gray-400">今日上传</span>
-                  <span className="font-medium">12 张</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-sm text-gray-600 dark:text-gray-400">本月上传</span>
-                  <span className="font-medium">156 张</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-sm text-gray-600 dark:text-gray-400">存储用量</span>
-                  <span className="font-medium">2.3 GB</span>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">存储状态</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm">阿里云 OSS</span>
-                  <Badge
-                    variant="default"
-                    className="bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200"
-                  >
-                    已连接
-                  </Badge>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-sm">腾讯云 COS</span>
-                  <Badge variant="secondary">未配置</Badge>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-sm">Amazon S3</span>
-                  <Badge variant="secondary">未配置</Badge>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
       </div>
+
+      {/* Recent Upload History */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-lg">最近上传记录</CardTitle>
+          <CardDescription>显示最近的文章上传记录</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-3">
+            {recentHistory.length > 0 ? (
+              recentHistory.map((record) => (
+                <div key={record.id} className="flex items-center justify-between p-3 border rounded-lg">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 bg-gray-200 dark:bg-gray-700 rounded flex items-center justify-center">
+                      <Image className="h-5 w-5 text-gray-500" />
+                    </div>
+                    <div>
+                      <p className="font-medium text-sm">
+                        <FilenameDisplay 
+                          filePath={record.files.length > 0 ? record.files[0] : 'Unknown file'}
+                          maxLength={25}
+                          showTooltip={true}
+                        />
+                        {record.files.length > 1 && (
+                          <span className="text-xs text-gray-500 ml-1">
+                            +{record.files.length - 1}个文件
+                          </span>
+                        )}
+                      </p>
+                      <p className="text-xs text-gray-500">
+                        {new Date(record.timestamp).toLocaleString()}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Badge 
+                      variant={record.success ? "default" : "destructive"}
+                      className={record.success ? "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200" : ""}
+                    >
+                      {record.success ? "已上传" : "失败"}
+                    </Badge>
+                    {record.success && record.metadata?.uploaded_url && (
+                      <Button 
+                        variant="outline" 
+                        size="sm"
+                        onClick={() => copyToClipboard(record.metadata.uploaded_url)}
+                      >
+                        <Copy className="h-3 w-3 mr-1" />
+                        复制链接
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              ))
+            ) : (
+              <div className="text-center py-8 text-gray-500">
+                <Image className="h-12 w-12 mx-auto mb-2 text-gray-300" />
+                <p>暂无上传记录</p>
+              </div>
+            )}
+          </div>
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>
@@ -480,40 +521,57 @@ export default function Content() {
         </CardHeader>
         <CardContent>
           <div className="space-y-3">
-            <div className="flex items-center justify-between p-3 border rounded-lg">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 bg-gray-200 dark:bg-gray-700 rounded"></div>
-                <div>
-                  <p className="font-medium text-sm">screenshot1.png</p>
-                  <p className="text-xs text-gray-500">2024-01-20 14:30</p>
+            {recentHistory.length > 0 ? (
+              recentHistory.map((record) => (
+                <div key={record.id} className="flex items-center justify-between p-3 border rounded-lg">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 bg-gray-200 dark:bg-gray-700 rounded flex items-center justify-center">
+                      <Image className="h-5 w-5 text-gray-500" />
+                    </div>
+                    <div>
+                      <p className="font-medium text-sm">
+                        <FilenameDisplay 
+                          filePath={record.files.length > 0 ? record.files[0] : 'Unknown file'}
+                          maxLength={25}
+                          showTooltip={true}
+                        />
+                        {record.files.length > 1 && (
+                          <span className="text-xs text-gray-500 ml-1">
+                            +{record.files.length - 1}个文件
+                          </span>
+                        )}
+                      </p>
+                      <p className="text-xs text-gray-500">
+                        {new Date(record.timestamp).toLocaleString()}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Badge 
+                      variant={record.success ? "default" : "destructive"}
+                      className={record.success ? "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200" : ""}
+                    >
+                      {record.success ? "已上传" : "失败"}
+                    </Badge>
+                    {record.success && record.metadata?.uploaded_url && (
+                      <Button 
+                        variant="outline" 
+                        size="sm"
+                        onClick={() => copyToClipboard(record.metadata.uploaded_url)}
+                      >
+                        <Copy className="h-3 w-3 mr-1" />
+                        复制链接
+                      </Button>
+                    )}
+                  </div>
                 </div>
+              ))
+            ) : (
+              <div className="text-center py-8 text-gray-500">
+                <Image className="h-12 w-12 mx-auto mb-2 text-gray-300" />
+                <p>暂无上传记录</p>
               </div>
-              <div className="flex items-center gap-2">
-                <Badge variant="default" className="bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200">
-                  已上传
-                </Badge>
-                <Button variant="outline" size="sm">
-                  复制链接
-                </Button>
-              </div>
-            </div>
-            <div className="flex items-center justify-between p-3 border rounded-lg">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 bg-gray-200 dark:bg-gray-700 rounded"></div>
-                <div>
-                  <p className="font-medium text-sm">diagram.jpg</p>
-                  <p className="text-xs text-gray-500">2024-01-20 14:28</p>
-                </div>
-              </div>
-              <div className="flex items-center gap-2">
-                <Badge variant="default" className="bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200">
-                  已上传
-                </Badge>
-                <Button variant="outline" size="sm">
-                  复制链接
-                </Button>
-              </div>
-            </div>
+            )}
           </div>
         </CardContent>
       </Card>
