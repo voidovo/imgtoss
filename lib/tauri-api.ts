@@ -71,6 +71,13 @@ export class TauriAPI {
   }
 
   /**
+   * Upload multiple images to OSS with custom IDs for progress tracking
+   */
+  async uploadImagesWithIds(imageData: [string, string][], config: OSSConfig): Promise<UploadResult[]> {
+    return invoke<UploadResult[]>('upload_images_with_ids', { imageData, config });
+  }
+
+  /**
    * Upload multiple images in batches with concurrent processing
    */
   async uploadImagesBatch(imagePaths: string[], config: OSSConfig, batchSize?: number): Promise<UploadResult[]> {
@@ -110,6 +117,13 @@ export class TauriAPI {
    */
   async clearUploadProgress(): Promise<void> {
     return invoke<void>('clear_upload_progress');
+  }
+
+  /**
+   * Generate a new UUID for use as file ID
+   */
+  async generateUuid(): Promise<string> {
+    return invoke<string>('generate_uuid');
   }
 
   // ============================================================================
@@ -492,12 +506,14 @@ export const fileOperations = {
 
 export const uploadOperations = {
   uploadImages: (imagePaths: string[], config: OSSConfig) => tauriAPI.uploadImages(imagePaths, config),
+  uploadImagesWithIds: (imageData: [string, string][], config: OSSConfig) => tauriAPI.uploadImagesWithIds(imageData, config),
   uploadImagesBatch: (imagePaths: string[], config: OSSConfig, batchSize?: number) => tauriAPI.uploadImagesBatch(imagePaths, config, batchSize),
   getUploadProgress: (taskId: string) => tauriAPI.getUploadProgress(taskId),
   getAllUploadProgress: () => tauriAPI.getAllUploadProgress(),
   cancelUpload: (taskId: string) => tauriAPI.cancelUpload(taskId),
   retryUpload: (taskId: string) => tauriAPI.retryUpload(taskId),
   clearUploadProgress: () => tauriAPI.clearUploadProgress(),
+  generateUuid: () => tauriAPI.generateUuid(),
 };
 
 export const configOperations = {

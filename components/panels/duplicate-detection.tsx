@@ -10,6 +10,7 @@ import { formatFileSizeHuman } from "@/lib/utils/format"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { tauriAPI } from "@/lib/tauri-api"
 import type { DuplicateCheckResult, DuplicateInfo } from "@/lib/types"
+import { copyUrlToClipboard } from "@/lib/utils/copy-to-clipboard"
 
 interface DuplicateDetectionProps {
   imagePaths: string[]
@@ -80,8 +81,7 @@ export default function DuplicateDetection({
   }
 
   const copyUrl = (url: string) => {
-    navigator.clipboard.writeText(url)
-    // Could add toast notification here
+    copyUrlToClipboard(url)
   }
 
   const handleContinueWithDuplicates = () => {

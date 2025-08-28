@@ -13,6 +13,10 @@ pub fn run() {
         eprintln!("Failed to initialize logger: {}", e);
     }
     tauri::Builder::default()
+        .plugin(tauri_plugin_stronghold::Builder::new(|_| {
+            // 使用固定的应用密码，通过 Argon2 进行哈希处理
+            b"imgtoss-secret-key-2024".to_vec()
+        }).build())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
@@ -22,6 +26,7 @@ pub fn run() {
             generate_thumbnail,
             // Upload Commands
             upload_images,
+            upload_images_with_ids,
             upload_images_batch,
             get_upload_progress,
             cancel_upload,
@@ -58,6 +63,7 @@ pub fn run() {
             // Progress Monitoring Commands
             get_all_upload_progress,
             clear_upload_progress,
+            generate_uuid,
             // Security and Health Commands
             health_check,
             validate_system_permissions,

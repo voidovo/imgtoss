@@ -19,6 +19,7 @@ import { NotificationSystem, ProgressNotificationCompact } from "@/components/ui
 import { FilenameDisplay } from "@/components/ui/filename-display"
 import { formatFileSizeHuman } from "@/lib/utils/format"
 import { getUserPreference, setUserPreference } from "@/lib/utils/user-preferences"
+import { copyUrlToClipboard, copyImageUrlToClipboard } from "@/lib/utils/copy-to-clipboard"
 
 // Provider display names
 const providerDisplayNames = {
@@ -164,7 +165,16 @@ export default function ImageUpload() {
     // 如果需要成功状态管理，可以在这里添加
   }
   
-  const generateId = () => Math.random().toString(36).substr(2, 9)
+  const generateId = async () => {
+    try {
+      // Use backend-generated UUID to ensure consistency with progress tracking
+      return await tauriAPI.generateUuid()
+    } catch (error) {
+      console.warn('Failed to generate UUID from backend, falling back to random ID:', error)
+      // Fallback to random ID if backend call fails
+      return Math.random().toString(36).substr(2, 9)
+    }
+  }
 
   // 创建上传文件对象（基于文件路径）
   const createUploadFileFromPath = async (filePath: string): Promise<UploadFile> => {
@@ -179,7 +189,7 @@ export default function ImageUpload() {
     }
     
     return {
-      id: generateId(),
+      id: await generateId(),
       filePath,
       fileName,
       preview: convertFileSrc(filePath), // 使用Tauri的convertFileSrc生成预览
@@ -191,8 +201,8 @@ export default function ImageUpload() {
   }
   
   // 创建上传文件对象（基于File对象，用于拖拽）
-  const createUploadFileFromFile = (file: File): UploadFile => ({
-    id: generateId(),
+  const createUploadFileFromFile = async (file: File): Promise<UploadFile> => ({
+    id: await generateId(),
     filePath: file.name, // 拖拽时只能获取文件名
     fileName: file.name,
     preview: URL.createObjectURL(file),
@@ -318,7 +328,7 @@ export default function ImageUpload() {
       
       if (imageFiles.length > 0) {
         // 使用File对象创建上传文件（拖拽时只能获取文件名）
-        const uploadFiles = imageFiles.map(createUploadFileFromFile)
+        const uploadFiles = await Promise.all(imageFiles.map(createUploadFileFromFile))
         await handleFiles(uploadFiles)
       }
     },
@@ -336,7 +346,7 @@ export default function ImageUpload() {
         }
         
         if (imageFiles.length > 0) {
-          const uploadFiles = imageFiles.map(createUploadFileFromFile)
+          const uploadFiles = await Promise.all(imageFiles.map(createUploadFileFromFile))
           await handleFiles(uploadFiles)
         }
       }
@@ -381,24 +391,20 @@ export default function ImageUpload() {
         )
       )
 
-      // 在桌面环境中，直接使用文件路径
-      const imagePaths = filesToUpload.map(f => f.filePath)
+      // 准备上传数据：(file_id, file_path) 元组
+      const imageData: [string, string][] = filesToUpload.map(f => [f.id, f.filePath])
 
-      // 使用upload_images接口（与文章上传保持一致）
-      const results = await tauriAPI.uploadImages(imagePaths, config)
+      // 使用新的upload_images_with_ids接口，确保ID一致性
+      const results = await tauriAPI.uploadImagesWithIds(imageData, config)
 
-      // 基于文件路径匹配结果
+      // 基于ID直接匹配结果（现在ID是一致的）
       setFiles(prev =>
         prev.map(file => {
           const uploadFile = filesToUpload.find(f => f.id === file.id)
           if (!uploadFile) return file
 
-          // 通过文件路径匹配结果
-          const result = results.find(r => 
-            r.image_id === uploadFile.filePath || 
-            r.image_id === uploadFile.fileName ||
-            uploadFile.filePath.endsWith(r.image_id)
-          )
+          // 直接通过ID匹配结果
+          const result = results.find(r => r.image_id === file.id)
           
           if (result) {
             return {
@@ -539,17 +545,11 @@ export default function ImageUpload() {
 
 
   const copyUrl = (url: string) => {
-    navigator.clipboard.writeText(url)
-    // Could add toast notification here
+    copyUrlToClipboard(url)
   }
 
   const copyImageUrlFromHistory = async (url: string) => {
-    try {
-      await navigator.clipboard.writeText(url)
-      // 可以在这里添加 toast 提示
-    } catch (error) {
-      console.error('Failed to copy to clipboard:', error)
-    }
+    await copyImageUrlToClipboard(url)
   }
 
   const totalFiles = files.length
