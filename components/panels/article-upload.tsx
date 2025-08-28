@@ -26,6 +26,7 @@ import { formatFileSizeHuman } from "@/lib/utils/format"
 import { getArticleUploadProvider, setArticleUploadProvider } from "@/lib/utils/user-preferences"
 import type { ScanResult, ImageReference, LinkReplacement, OSSConfig, HistoryRecord } from "@/lib/types"
 import { OSSProvider } from "@/lib/types"
+import { copyToClipboardWithToast } from "@/lib/utils/copy-to-clipboard"
 
 // Provider display names
 const providerDisplayNames = {
@@ -114,12 +115,7 @@ export default function ArticleUpload() {
   const clearSuccess = () => setState(prev => ({ ...prev, successMessage: null }))
 
   const copyToClipboard = async (text: string) => {
-    try {
-      await navigator.clipboard.writeText(text)
-      // 可以在这里添加 toast 提示
-    } catch (error) {
-      console.error('Failed to copy to clipboard:', error)
-    }
+    await copyToClipboardWithToast(text)
   }
 
   const handleProviderChange = (provider: OSSProvider) => {

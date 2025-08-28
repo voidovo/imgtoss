@@ -8,7 +8,13 @@
       "Bash(git add:*)",
       "Bash(git commit:*)",
       "Bash(grep:*)",
-      "Bash(rg:*)"
+      "Bash(rg:*)",
+      "WebFetch(domain:v2.tauri.app)",
+      "Bash(pnpm tauri:*)",
+      "WebFetch(domain:docs.rs)",
+      "Bash(sed:*)",
+      "Bash(cargo tree:*)",
+      "Bash(timeout 30 tokei --exclude target --exclude '**/target/**' ~/.cargo/registry/src/)"
     ],
     "deny": [],
     "ask": []

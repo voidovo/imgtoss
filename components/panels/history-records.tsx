@@ -34,6 +34,7 @@ import { FilenameDisplay } from "@/components/ui/filename-display"
 import { formatFileSizeHuman } from "@/lib/utils/format"
 import { historyOperations } from "@/lib/tauri-api"
 import type { HistoryRecord, PaginatedResult, HistoryStatistics } from "@/lib/types"
+import { copyToClipboardWithToast, copyImageUrlToClipboard } from "@/lib/utils/copy-to-clipboard"
 
 // Helper function to extract filename from file path
 function extractFilename(filePath: string): string {
@@ -177,17 +178,11 @@ export function HistoryRecords() {
   }
 
   const copyToClipboard = (text: string) => {
-    navigator.clipboard.writeText(text)
-    // You could add a toast notification here
+    copyToClipboardWithToast(text)
   }
 
   const copyImageUrl = (url: string) => {
-    navigator.clipboard.writeText(url).then(() => {
-      // TODO: 可以在这里添加 toast 通知来显示复制成功
-      console.log('已复制图片链接:', url)
-    }).catch((error) => {
-      console.error('复制失败:', error)
-    })
+    copyImageUrlToClipboard(url)
   }
 
   const handleExportHistory = async () => {

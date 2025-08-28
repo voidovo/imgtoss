@@ -319,16 +319,307 @@ pub async fn generate_thumbnail(image_path: String, size: u32) -> Result<Vec<u8>
 // ============================================================================
 
 #[tauri::command]
+pub async fn upload_images_with_ids(
+    image_data: Vec<(String, String)>, // (file_id, image_path) pairs
+    config: OSSConfig,
+) -> Result<Vec<UploadResult>, String> {
+    log_info!(
+        operation = "upload_images_with_ids_command",
+        image_count = image_data.len(),
+        provider = ?config.provider,
+        "Starting upload images with IDs command"
+    );
+
+    // Rate limiting
+    UPLOAD_RATE_LIMITER
+        .check_rate_limit("upload_images")
+        .map_err(|e| {
+            log_error!(
+                operation = "upload_images_with_ids_command",
+                error = %e,
+                "Rate limit exceeded"
+            );
+            e.to_string()
+        })?;
+
+    // Validate input parameters
+    if image_data.is_empty() {
+        log_error!(
+            operation = "upload_images_with_ids_command",
+            error = "Image data cannot be empty",
+            "Empty image data provided"
+        );
+        return Err("Image data cannot be empty".to_string());
+    }
+
+    for (file_id, image_path) in &image_data {
+        // Validate file ID format (should be UUID)
+        if file_id.is_empty() || file_id.len() != 36 || file_id.chars().filter(|&c| c == '-').count() != 4 {
+            log_error!(
+                operation = "upload_images_with_ids_command",
+                file_id = %file_id,
+                error = "Invalid file ID format",
+                "File ID must be a valid UUID"
+            );
+            return Err(format!("Invalid file ID format: {}", file_id));
+        }
+
+        log_debug!(
+            operation = "upload_images_with_ids_command",
+            path_index = 0,
+            path = %image_path,
+            file_id = %file_id,
+            "Validating image path and file ID"
+        );
+
+        // Basic path validation (sync version like in original upload_images)
+        if image_path.is_empty() {
+            log_error!(
+                operation = "upload_images_with_ids_command",
+                image_path = %image_path,
+                file_id = %file_id,
+                error = "Image path cannot be empty",
+                "Path validation failed"
+            );
+            return Err("Image path cannot be empty".to_string());
+        }
+
+        // Security check: prevent path traversal
+        if image_path.contains("..") || image_path.contains("~") {
+            log_error!(
+                operation = "upload_images_with_ids_command",
+                image_path = %image_path,
+                file_id = %file_id,
+                error = "Invalid image path detected",
+                "Security validation failed"
+            );
+            return Err("Invalid image path detected".to_string());
+        }
+
+        let path_obj = Path::new(image_path);
+        if !path_obj.exists() {
+            log_error!(
+                operation = "upload_images_with_ids_command",
+                image_path = %image_path,
+                file_id = %file_id,
+                error = "Image file not found",
+                "File validation failed"
+            );
+            return Err(format!("Image file not found: {}", image_path));
+        }
+
+        if !path_obj.is_file() {
+            log_error!(
+                operation = "upload_images_with_ids_command",
+                image_path = %image_path,
+                file_id = %file_id,
+                error = "Path is not a file",
+                "File validation failed"
+            );
+            return Err(format!("Path is not a file: {}", image_path));
+        }
+    }
+
+    // Validate OSS configuration (like in original upload_images)
+    validate_oss_config_params(&config).map_err(|e| {
+        log_error!(
+            operation = "upload_images_with_ids_command",
+            error = %e,
+            "OSS configuration validation failed"
+        );
+        e.to_string()
+    })?;
+
+    log_info!(
+        operation = "upload_images_with_ids_command",
+        provider = ?config.provider,
+        bucket = %config.bucket,
+        endpoint = %config.endpoint,
+        region = %config.region,
+        path_template = %config.path_template,
+        cdn_domain = ?config.cdn_domain,
+        compression_enabled = config.compression_enabled,
+        compression_quality = config.compression_quality,
+        access_key_id_prefix = %config.access_key_id.chars().take(8).collect::<String>(),
+        "OSS configuration loaded"
+    );
+
+    let oss_service = OSSService::new(config).map_err(|e| {
+        log_error!(
+            operation = "upload_images_with_ids_command",
+            error = %e,
+            "Failed to create OSS service"
+        );
+        e.to_string()
+    })?;
+    
+    log_debug!(
+        operation = "upload_images_with_ids_command",
+        "OSS service created successfully"
+    );
+    
+    let image_service = ImageService::new();
+
+    let mut results = Vec::new();
+
+    for (file_id, image_path) in image_data {
+        log_debug!(
+            operation = "upload_images_with_ids_command",
+            image_path = %image_path,
+            file_id = %file_id,
+            "Processing image for upload"
+        );
+
+        // Generate progress callback using the provided file_id
+        let progress_callback = {
+            let file_id_clone = file_id.clone();
+            move |progress: UploadProgress| {
+                let _ = PROGRESS_NOTIFIER.update_progress(file_id_clone.clone(), progress);
+            }
+        };
+
+        match upload_single_image(
+            &oss_service,
+            &image_service,
+            &image_path,
+            &file_id, // Use provided file_id instead of generating new UUID
+            Some(Box::new(progress_callback)),
+        )
+        .await
+        {
+            Ok((url, checksum)) => {
+                log_info!(
+                    operation = "upload_images_with_ids_command",
+                    image_path = %image_path,
+                    file_id = %file_id,
+                    uploaded_url = %url,
+                    checksum = %checksum,
+                    "Image uploaded successfully"
+                );
+                
+                results.push(UploadResult {
+                    image_id: file_id.clone(),
+                    success: true,
+                    uploaded_url: Some(url.clone()),
+                    error: None,
+                });
+
+                // Store in history with checksum
+                if let Ok(history_service) = HistoryService::new() {
+                    let mut metadata = std::collections::HashMap::new();
+                    metadata.insert("checksum".to_string(), checksum);
+                    metadata.insert("uploaded_url".to_string(), url);
+                    metadata.insert("image_id".to_string(), file_id.clone());
+
+                    let history_record = crate::services::history_service::HistoryRecord {
+                        id: uuid::Uuid::new_v4().to_string(),
+                        timestamp: chrono::Utc::now(),
+                        operation: crate::services::history_service::OperationType::Upload,
+                        files: vec![image_path.clone()],
+                        image_count: 1,
+                        success: true,
+                        backup_path: None,
+                        duration: None,
+                        total_size: Some(
+                            std::fs::metadata(&image_path).map(|m| m.len()).unwrap_or(0),
+                        ),
+                        error_message: None,
+                        metadata,
+                    };
+
+                    let _ = history_service.add_history_record(history_record).await;
+                }
+
+                // Send final completion progress before cleanup
+                let final_progress = crate::models::UploadProgress {
+                    image_id: file_id.clone(),
+                    progress: 100.0,
+                    bytes_uploaded: std::fs::metadata(&image_path).map(|m| m.len()).unwrap_or(0),
+                    total_bytes: std::fs::metadata(&image_path).map(|m| m.len()).unwrap_or(0),
+                    speed: None,
+                };
+                let _ = PROGRESS_NOTIFIER.update_progress(file_id.clone(), final_progress);
+                
+                // Small delay to ensure frontend receives the completion event
+                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                
+                // Remove progress tracking for completed upload
+                let _ = PROGRESS_NOTIFIER.remove_progress(&file_id);
+            }
+            Err(e) => {
+                log_error!(
+                    operation = "upload_images_with_ids_command",
+                    image_path = %image_path,
+                    file_id = %file_id,
+                    error = %e,
+                    "Image upload failed"
+                );
+                
+                results.push(UploadResult {
+                    image_id: file_id.clone(),
+                    success: false,
+                    uploaded_url: None,
+                    error: Some(e.to_string()),
+                });
+
+                // Store failed upload in history
+                if let Ok(history_service) = HistoryService::new() {
+                    let mut metadata = std::collections::HashMap::new();
+                    metadata.insert("image_id".to_string(), file_id.clone());
+
+                    let history_record = crate::services::history_service::HistoryRecord {
+                        id: uuid::Uuid::new_v4().to_string(),
+                        timestamp: chrono::Utc::now(),
+                        operation: crate::services::history_service::OperationType::Upload,
+                        files: vec![image_path.clone()],
+                        image_count: 1,
+                        success: false,
+                        backup_path: None,
+                        duration: None,
+                        total_size: Some(
+                            std::fs::metadata(&image_path).map(|m| m.len()).unwrap_or(0),
+                        ),
+                        error_message: Some(e.to_string()),
+                        metadata,
+                    };
+
+                    let _ = history_service.add_history_record(history_record).await;
+                }
+
+                // Send final progress for failed upload (progress remains as is, but ensure UI gets final state)
+                if let Ok(current_progress) = PROGRESS_NOTIFIER.get_progress(&file_id) {
+                    if let Some(mut progress) = current_progress {
+                        // Mark as completed with error (UI can distinguish by checking results)
+                        progress.progress = 100.0;
+                        let _ = PROGRESS_NOTIFIER.update_progress(file_id.clone(), progress);
+                        
+                        // Small delay to ensure frontend receives the completion event
+                        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                    }
+                }
+                
+                // Remove progress tracking for failed upload
+                let _ = PROGRESS_NOTIFIER.remove_progress(&file_id);
+            }
+        }
+    }
+
+    log_info!(
+        operation = "upload_images_with_ids_command",
+        total_images = results.len(),
+        successful_uploads = results.iter().filter(|r| r.success).count(),
+        failed_uploads = results.iter().filter(|r| !r.success).count(),
+        "Upload images with IDs command completed"
+    );
+
+    Ok(results)
+}
+
+#[tauri::command]
 pub async fn upload_images(
     image_paths: Vec<String>,
     config: OSSConfig,
 ) -> Result<Vec<UploadResult>, String> {
-    log_info!(
-        operation = "upload_images_command",
-        image_count = image_paths.len(),
-        provider = ?config.provider,
-        "Starting upload images command"
-    );
 
     // Rate limiting
     UPLOAD_RATE_LIMITER
@@ -534,6 +825,19 @@ pub async fn upload_images(
                     let _ = history_service.add_history_record(history_record).await;
                 }
 
+                // Send final completion progress before cleanup
+                let final_progress = crate::models::UploadProgress {
+                    image_id: image_id.clone(),
+                    progress: 100.0,
+                    bytes_uploaded: std::fs::metadata(&image_path).map(|m| m.len()).unwrap_or(0),
+                    total_bytes: std::fs::metadata(&image_path).map(|m| m.len()).unwrap_or(0),
+                    speed: None,
+                };
+                let _ = PROGRESS_NOTIFIER.update_progress(image_id.clone(), final_progress);
+                
+                // Small delay to ensure frontend receives the completion event
+                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                
                 // Remove progress tracking for completed upload
                 let _ = PROGRESS_NOTIFIER.remove_progress(&image_id);
             }
@@ -577,6 +881,18 @@ pub async fn upload_images(
                     let _ = history_service.add_history_record(history_record).await;
                 }
 
+                // Send final progress for failed upload (progress remains as is, but ensure UI gets final state)
+                if let Ok(current_progress) = PROGRESS_NOTIFIER.get_progress(&image_id) {
+                    if let Some(mut progress) = current_progress {
+                        // Mark as completed with error (UI can distinguish by checking results)
+                        progress.progress = 100.0;
+                        let _ = PROGRESS_NOTIFIER.update_progress(image_id.clone(), progress);
+                        
+                        // Small delay to ensure frontend receives the completion event
+                        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                    }
+                }
+                
                 // Remove progress tracking for failed upload
                 let _ = PROGRESS_NOTIFIER.remove_progress(&image_id);
             }
@@ -966,6 +1282,11 @@ pub async fn clear_upload_progress() -> Result<(), String> {
     PROGRESS_NOTIFIER.clear_all().map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+pub async fn generate_uuid() -> Result<String, String> {
+    Ok(uuid::Uuid::new_v4().to_string())
+}
+
 // ============================================================================
 // OSS Configuration Commands
 // ============================================================================
@@ -982,7 +1303,7 @@ pub async fn save_oss_config(config: OSSConfig, options: Option<SaveOptions>) ->
 
     let config_service = ConfigService::new().map_err(|e| e.to_string())?;
     
-    // Clear cache if force revalidation is requested
+        // Clear cache if force revalidation is requested
     if let Some(opts) = &options {
         if opts.force_revalidate {
             println!("🔄 Force revalidation requested, clearing cache for configuration");
@@ -999,6 +1320,7 @@ pub async fn save_oss_config(config: OSSConfig, options: Option<SaveOptions>) ->
 #[tauri::command]
 pub async fn load_oss_config() -> Result<Option<OSSConfig>, String> {
     let config_service = ConfigService::new().map_err(|e| e.to_string())?;
+    
     config_service
         .load_config()
         .await
@@ -1105,6 +1427,7 @@ pub async fn list_oss_objects(
 #[tauri::command]
 pub async fn export_oss_config() -> Result<String, String> {
     let config_service = ConfigService::new().map_err(|e| e.to_string())?;
+    
     let config = config_service
         .load_config()
         .await
@@ -1149,6 +1472,7 @@ pub async fn import_oss_config(config_json: String) -> Result<(), String> {
 
     // Save the imported config
     let config_service = ConfigService::new().map_err(|e| e.to_string())?;
+    
     config_service
         .save_config(&config)
         .await
