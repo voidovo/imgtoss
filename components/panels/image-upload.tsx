@@ -1,6 +1,7 @@
 "use client"
 
 import type React from "react"
+import { memo } from "react"
 
 import { useState, useCallback, useRef, useEffect } from "react"
 import { Upload, X, ImageIcon, CheckCircle, AlertCircle, Trash2, Eye, Copy, RefreshCw, Image, Calendar, Settings } from "lucide-react"
@@ -20,6 +21,7 @@ import { FilenameDisplay } from "@/components/ui/filename-display"
 import { formatFileSizeHuman } from "@/lib/utils/format"
 import { getUserPreference, setUserPreference } from "@/lib/utils/user-preferences"
 import { copyUrlToClipboard, copyImageUrlToClipboard } from "@/lib/utils/copy-to-clipboard"
+import { useAppState } from "@/lib/contexts/app-state-context"
 
 // Provider display names
 const providerDisplayNames = {
@@ -42,27 +44,42 @@ interface UploadFile {
   fileSize: number
 }
 
-export default function ImageUpload() {
+function ImageUpload() {
   const [files, setFiles] = useState<UploadFile[]>([])
   const [isDragging, setIsDragging] = useState(false)
   const [isUploading, setIsUploading] = useState(false)
-  const [config, setConfig] = useState<OSSConfig | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [recentHistory, setRecentHistory] = useState<HistoryRecord[]>([])
   
-  // 重复检测设置（从用户偏好设置加载）
-  const [duplicateCheckEnabled, setDuplicateCheckEnabled] = useState<boolean>(() => {
-    try {
-      console.log('[DuplicateCheck] 加载重复检测偏好设置')
-      const preference = getUserPreference('duplicateCheckEnabled')
-      const enabled = preference !== undefined ? preference : true // 默认启用
-      console.log('[DuplicateCheck] 重复检测状态:', enabled)
-      return enabled
-    } catch (error) {
-      console.error('[DuplicateCheck] 加载偏好设置失败:', error)
-      return true // 错误时默认启用
+  // Use global app state for configuration
+  const { state: appState } = useAppState()
+  const config = appState.ossConfig
+  
+  // 重复检测设置（延迟加载以避免阻塞）
+  const [duplicateCheckEnabled, setDuplicateCheckEnabled] = useState<boolean>(true) // 默认启用
+  
+  // 异步加载用户偏好设置
+  useEffect(() => {
+    const loadDuplicateCheckPreference = async () => {
+      try {
+        // 使用 setTimeout 延迟加载，避免阻塞主线程
+        setTimeout(() => {
+          try {
+            const preference = getUserPreference('duplicateCheckEnabled')
+            const enabled = preference !== undefined ? preference : true
+            setDuplicateCheckEnabled(enabled)
+            console.log('[DuplicateCheck] 重复检测状态加载完成:', enabled)
+          } catch (error) {
+            console.warn('[DuplicateCheck] 加载偏好设置失败，使用默认值:', error)
+          }
+        }, 200) // 延迟 200ms 避免阻塞页面渲染
+      } catch (error) {
+        console.error('[DuplicateCheck] 偏好设置加载异常:', error)
+      }
     }
-  })
+    
+    loadDuplicateCheckPreference()
+  }, [])
   
   // 简化的上传路径
   const uploadPath = "images/"
@@ -93,51 +110,43 @@ export default function ImageUpload() {
     retryUpload,
   } = useProgressMonitoring()
 
-  // 加载 OSS 配置和进度监控
+  // 延迟加载历史记录，避免阻塞初始渲染
   useEffect(() => {
-    const loadConfig = async () => {
-      try {
-        const loadedConfig = await configOperations.loadOSSConfig()
-        setConfig(loadedConfig)
-      } catch (error) {
-        console.error("Failed to load OSS config:", error)
-      }
+    if (!appState.isInitialized) return
+
+    // 延迟加载以提高页面响应性
+    const loadDataWithDelay = async () => {
+      // 延迟执行非关键初始化
+      setTimeout(async () => {
+        try {
+          // 并行加载历史记录和初始化监控
+          const [historyResult] = await Promise.allSettled([
+            historyOperations.searchHistory(
+              undefined, "upload", true, undefined, undefined, 1, 5
+            )
+          ])
+
+          if (historyResult.status === 'fulfilled') {
+            setRecentHistory(historyResult.value.items || [])
+          } else {
+            console.warn("Failed to load recent history:", historyResult.reason)
+          }
+
+          // 启动进度监控（单例模式，不会重复创建）
+          await startMonitoring()
+        } catch (error) {
+          console.warn("Non-critical initialization failed:", error)
+        }
+      }, 300) // 延迟 300ms，让页面先完成关键渲染
     }
 
-    const loadRecentHistory = async () => {
-      try {
-        // 获取最近5条成功的图片上传记录
-        const result = await historyOperations.searchHistory(
-          undefined, // searchTerm
-          "upload", // operationType
-          true, // successOnly
-          undefined, // startDate
-          undefined, // endDate
-          1, // page
-          5 // pageSize
-        )
-        setRecentHistory(result.items || [])
-      } catch (error) {
-        console.error("Failed to load recent history:", error)
-      }
-    }
-
-    const initializeMonitoring = async () => {
-      try {
-        await startMonitoring()
-      } catch (error) {
-        console.error("Failed to start progress monitoring:", error)
-      }
-    }
-
-    loadConfig()
-    loadRecentHistory()
-    initializeMonitoring()
+    loadDataWithDelay()
 
     return () => {
+      // 清理操作保持轻量
       stopMonitoring()
     }
-  }, [startMonitoring, stopMonitoring])
+  }, [appState.isInitialized, startMonitoring, stopMonitoring])
 
   // Update file progress from the monitoring hook
   useEffect(() => {
@@ -887,3 +896,6 @@ export default function ImageUpload() {
     </div>
   )
 }
+
+// 使用 React.memo 优化性能，避免不必要的重新渲染
+export default memo(ImageUpload)

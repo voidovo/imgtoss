@@ -14,7 +14,8 @@
       "WebFetch(domain:docs.rs)",
       "Bash(sed:*)",
       "Bash(cargo tree:*)",
-      "Bash(timeout 30 tokei --exclude target --exclude '**/target/**' ~/.cargo/registry/src/)"
+      "Bash(timeout 30 tokei --exclude target --exclude '**/target/**' ~/.cargo/registry/src/)",
+      "Bash(pnpm build)"
     ],
     "deny": [],
     "ask": []

@@ -1,6 +1,6 @@
 "use client"
 
-import React, { useState, useCallback, useEffect } from "react"
+import React, { useState, useCallback, useEffect, memo } from "react"
 import { FileText, Upload, CheckCircle, AlertCircle, FolderOpen, Image, Copy, Settings } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -27,6 +27,7 @@ import { getArticleUploadProvider, setArticleUploadProvider } from "@/lib/utils/
 import type { ScanResult, ImageReference, LinkReplacement, OSSConfig, HistoryRecord } from "@/lib/types"
 import { OSSProvider } from "@/lib/types"
 import { copyToClipboardWithToast } from "@/lib/utils/copy-to-clipboard"
+import { useAppState } from "@/lib/contexts/app-state-context"
 
 // Provider display names
 const providerDisplayNames = {
@@ -47,7 +48,7 @@ interface ProcessingState {
   successMessage: string | null
 }
 
-export default function ArticleUpload() {
+function ArticleUpload() {
   const [showImageModal, setShowImageModal] = useState(false)
   const [state, setState] = useState<ProcessingState>({
     selectedFiles: [],
@@ -60,56 +61,57 @@ export default function ArticleUpload() {
     successMessage: null,
   })
 
-  const [ossConfig, setOssConfig] = useState<OSSConfig | null>(null)
   const [selectedProvider, setSelectedProvider] = useState<OSSProvider>(OSSProvider.Aliyun)
   const [availableProviders, setAvailableProviders] = useState<OSSProvider[]>([])
   const [recentHistory, setRecentHistory] = useState<HistoryRecord[]>([])
 
-  // Load OSS config and recent history on component mount
+  // 使用全局应用状态获取配置
+  const { state: appState } = useAppState()
+  const ossConfig = appState.ossConfig
+
+  // 延迟初始化，避免阻塞页面渲染
   React.useEffect(() => {
-    const loadConfig = async () => {
-      try {
-        const config = await configOperations.loadOSSConfig()
-        setOssConfig(config)
-        
-        // 设置可用的供应商列表（目前只有当前配置的供应商）
-        if (config) {
-          setAvailableProviders([config.provider])
-          
-          // 尝试使用用户偏好设置，如果没有则使用配置的供应商
-          const preferredProvider = getArticleUploadProvider()
-          if (preferredProvider && preferredProvider === config.provider) {
-            setSelectedProvider(preferredProvider)
-          } else {
-            setSelectedProvider(config.provider)
+    if (!appState.isInitialized) return
+
+    // 延迟执行非关键初始化
+    const initializeWithDelay = () => {
+      setTimeout(async () => {
+        try {
+          // 设置可用的供应商列表（目前只有当前配置的供应商）
+          if (ossConfig) {
+            setAvailableProviders([ossConfig.provider])
+            
+            // 异步加载用户偏好设置
+            try {
+              const preferredProvider = getArticleUploadProvider()
+              if (preferredProvider && preferredProvider === ossConfig.provider) {
+                setSelectedProvider(preferredProvider)
+              } else {
+                setSelectedProvider(ossConfig.provider)
+              }
+            } catch (error) {
+              console.warn("Failed to load article upload provider preference:", error)
+              setSelectedProvider(ossConfig.provider)
+            }
           }
+
+          // 并行加载历史记录
+          try {
+            const result = await historyOperations.searchHistory(
+              undefined, "replace", true, undefined, undefined, 1, 3
+            )
+            setRecentHistory(result.items || [])
+          } catch (error) {
+            console.warn("Failed to load recent history:", error)
+          }
+        } catch (error) {
+          console.warn("Article upload initialization failed:", error)
         }
-      } catch (error) {
-        console.error("Failed to load OSS config:", error)
-      }
+      }, 250) // 延迟 250ms 避免阻塞渲染
     }
     
-    const loadRecentHistory = async () => {
-      try {
-        // 获取最近3条成功的文章上传记录 (operation = "replace")
-        const result = await historyOperations.searchHistory(
-          undefined, // searchTerm
-          "replace", // operationType
-          true, // successOnly
-          undefined, // startDate
-          undefined, // endDate
-          1, // page
-          3 // pageSize
-        )
-        setRecentHistory(result.items || [])
-      } catch (error) {
-        console.error("Failed to load recent history:", error)
-      }
-    }
-    
-    loadConfig()
-    loadRecentHistory()
-  }, [])
+    initializeWithDelay()
+  }, [appState.isInitialized, ossConfig])
 
   const clearError = () => setState(prev => ({ ...prev, error: null }))
   const clearSuccess = () => setState(prev => ({ ...prev, successMessage: null }))
@@ -673,3 +675,6 @@ export default function ArticleUpload() {
     </div>
   )
 }
+
+// 使用 React.memo 优化性能，避免不必要的重新渲染
+export default memo(ArticleUpload)
