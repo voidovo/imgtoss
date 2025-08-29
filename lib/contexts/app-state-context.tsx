@@ -451,7 +451,13 @@ export function AppStateProvider({ children }: AppStateProviderProps) {
 
   const loadUserPreferences = useCallback(async () => {
     try {
-      const stored = localStorage.getItem('imgtoss-user-preferences');
+      // Use async operation to prevent blocking main thread
+      const stored = await new Promise<string | null>(resolve => {
+        setTimeout(() => {
+          resolve(localStorage.getItem('imgtoss-user-preferences'));
+        }, 0);
+      });
+      
       if (stored) {
         const preferences = JSON.parse(stored) as Partial<UserPreferences>;
         dispatch({ type: 'SET_USER_PREFERENCES', payload: preferences });
@@ -561,63 +567,98 @@ export function AppStateProvider({ children }: AppStateProviderProps) {
 
   const initialize = useCallback(async () => {
     try {
-      // Load user preferences first
-      await loadUserPreferences();
+      // Phase 1: Critical initialization (parallel execution)
+      const [preferencesResult, configResult] = await Promise.allSettled([
+        loadUserPreferences(),
+        loadConfig()
+      ]);
       
-      // Load configuration
-      await loadConfig();
-      
-      // Auto-test connection if config exists
-      try {
-        const config = await tauriAPI.loadOSSConfig();
-        if (config) {
-          console.log('Configuration loaded, performing automatic connection test...');
-          const connectionTest = await tauriAPI.testOSSConnection(config);
-          
-          // Save connection test result to state
-          dispatch({ type: 'SET_LAST_CONNECTION_TEST', payload: connectionTest });
-          
-          if (connectionTest.success) {
-            console.log(`Connection test successful (latency: ${connectionTest.latency}ms)`);
-            if (state.userPreferences.showNotifications) {
-              addNotification({
-                type: 'Success' as any,
-                title: '存储连接成功',
-                message: `连接测试成功，延迟: ${connectionTest.latency}ms`,
-                dismissible: true,
-                auto_dismiss: true,
-              });
-            }
-          } else {
-            console.warn('Connection test failed:', connectionTest.error);
-            addNotification({
-              type: 'Warning' as any,
-              title: '存储连接失败',
-              message: `连接测试失败: ${connectionTest.error || '未知错误'}`,
-              dismissible: true,
-              auto_dismiss: false,
-            });
-          }
-        }
-      } catch (error) {
-        console.warn('Failed to perform automatic connection test:', error);
+      // Handle preference loading errors
+      if (preferencesResult.status === 'rejected') {
+        console.warn('Failed to load user preferences:', preferencesResult.reason);
       }
       
-      // Load notification config
-      try {
-        const notificationConfig = await tauriAPI.getNotificationConfig();
-        dispatch({ type: 'SET_NOTIFICATION_CONFIG', payload: notificationConfig });
-      } catch (error) {
-        console.warn('Failed to load notification config:', error);
+      // Handle config loading errors
+      if (configResult.status === 'rejected') {
+        console.warn('Failed to load configuration:', configResult.reason);
       }
       
-      // Get initial system health
-      await refreshSystemHealth();
-      
-      // Get initial history statistics
-      await refreshHistoryStatistics();
-      
+      // Mark as initialized early to unblock UI
       dispatch({ type: 'SET_INITIALIZED', payload: true });
+      
+      // Phase 2: Non-critical initialization (deferred)
+      setTimeout(async () => {
+        try {
+          // Parallel execution of non-critical tasks
+          const nonCriticalTasks = [];
+          
+          // Connection test (if config exists)
+          if (configResult.status === 'fulfilled') {
+            nonCriticalTasks.push(
+              (async () => {
+                try {
+                  const config = await tauriAPI.loadOSSConfig();
+                  if (config) {
+                    console.log('Configuration loaded, performing automatic connection test...');
+                    const connectionTest = await tauriAPI.testOSSConnection(config);
+                    
+                    dispatch({ type: 'SET_LAST_CONNECTION_TEST', payload: connectionTest });
+                    
+                    if (connectionTest.success) {
+                      console.log(`Connection test successful (latency: ${connectionTest.latency}ms)`);
+                      if (state.userPreferences.showNotifications) {
+                        addNotification({
+                          type: 'Success' as any,
+                          title: '存储连接成功',
+                          message: `连接测试成功，延迟: ${connectionTest.latency}ms`,
+                          dismissible: true,
+                          auto_dismiss: true,
+                        });
+                      }
+                    } else {
+                      console.warn('Connection test failed:', connectionTest.error);
+                      addNotification({
+                        type: 'Warning' as any,
+                        title: '存储连接失败',
+                        message: `连接测试失败: ${connectionTest.error || '未知错误'}`,
+                        dismissible: true,
+                        auto_dismiss: false,
+                      });
+                    }
+                  }
+                } catch (error) {
+                  console.warn('Failed to perform automatic connection test:', error);
+                }
+              })()
+            );
+          }
+          
+          // Notification config
+          nonCriticalTasks.push(
+            (async () => {
+              try {
+                const notificationConfig = await tauriAPI.getNotificationConfig();
+                dispatch({ type: 'SET_NOTIFICATION_CONFIG', payload: notificationConfig });
+              } catch (error) {
+                console.warn('Failed to load notification config:', error);
+              }
+            })()
+          );
+          
+          // System health
+          nonCriticalTasks.push(refreshSystemHealth());
+          
+          // History statistics
+          nonCriticalTasks.push(refreshHistoryStatistics());
+          
+          // Execute all non-critical tasks in parallel
+          await Promise.allSettled(nonCriticalTasks);
+          
+        } catch (error) {
+          console.warn('Non-critical initialization failed:', error);
+        }
+      }, 100); // Defer by 100ms to unblock UI
+      
     } catch (error) {
       console.error('Failed to initialize application state:', error);
       addError({
@@ -626,6 +667,8 @@ export function AppStateProvider({ children }: AppStateProviderProps) {
         details: error instanceof Error ? error.message : 'Unknown error',
         recoverable: true,
       });
+      // Still mark as initialized to prevent blocking
+      dispatch({ type: 'SET_INITIALIZED', payload: true });
     }
   }, [loadUserPreferences, loadConfig, refreshSystemHealth, refreshHistoryStatistics, state.userPreferences.showNotifications, addNotification]);
 
@@ -682,16 +725,24 @@ export function AppStateProvider({ children }: AppStateProviderProps) {
     };
   }, []);
 
-  // Periodic sync when online
+  // Periodic sync when online (reduced frequency)
   useEffect(() => {
     if (!state.isOnline || !state.isInitialized) return;
     
+    // Reduce sync frequency to every 5 minutes to avoid performance impact
     const interval = setInterval(() => {
-      syncWithBackend();
-    }, 60000); // Sync every minute
+      // Only sync if there are active operations or if it's been a while
+      const timeSinceLastSync = state.lastSyncTime ? Date.now() - state.lastSyncTime.getTime() : 0;
+      const hasActiveOperations = state.activeUploads > 0;
+      
+      // Sync if there are active uploads or it's been more than 10 minutes
+      if (hasActiveOperations || timeSinceLastSync > 600000) {
+        syncWithBackend();
+      }
+    }, 300000); // Check every 5 minutes instead of 1 minute
     
     return () => clearInterval(interval);
-  }, [state.isOnline, state.isInitialized, syncWithBackend]);
+  }, [state.isOnline, state.isInitialized, state.activeUploads, state.lastSyncTime, syncWithBackend]);
 
   // Auto-save preferences when they change
   useEffect(() => {
