@@ -1147,6 +1147,7 @@ impl OSSService {
         self.provider.test_connection().await
     }
 
+    #[allow(dead_code)]
     pub async fn upload_multiple(&self, images: Vec<(String, Vec<u8>)>) -> Result<Vec<UploadResult>> {
         let mut results = Vec::new();
         

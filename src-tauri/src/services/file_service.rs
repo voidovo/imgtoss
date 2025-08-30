@@ -2,7 +2,7 @@ use crate::models::{ScanResult, ImageReference, LinkReplacement, BackupInfo, Sca
                    ReplacementResult, ReplacementError, BatchReplacementResult, RollbackResult, RollbackError};
 use crate::services::ImageService;
 use crate::utils::{Result, AppError};
-use crate::{log_debug, log_info, log_error, log_warn, log_timing};
+use crate::{log_debug, log_info, log_error, log_warn};
 use regex::Regex;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -14,6 +14,7 @@ pub struct FileService {
     // Regex patterns for matching image references in Markdown
     image_patterns: Vec<Regex>,
     backup_dir: PathBuf,
+    #[allow(dead_code)]
     image_service: ImageService,
 }
 
@@ -558,11 +559,13 @@ impl FileService {
     }
 
     /// Get backup directory path
+    #[allow(dead_code)]
     pub fn get_backup_dir(&self) -> &Path {
         &self.backup_dir
     }
 
     /// Clean old backup files (older than specified days)
+    #[allow(dead_code)]
     pub async fn clean_old_backups(&self, days: u64) -> Result<usize> {
         let cutoff_time = SystemTime::now()
             .checked_sub(std::time::Duration::from_secs(days * 24 * 60 * 60))

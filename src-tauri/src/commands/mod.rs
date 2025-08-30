@@ -3,7 +3,7 @@ use crate::models::{
     HistoryRecord, ImageInfo, LinkReplacement, NotificationConfig, OSSConfig, OSSConnectionTest,
     ObjectInfo, PaginatedResult, ProgressNotification, ReplacementResult, RollbackResult,
     ScanResult, SystemHealth, UploadProgress, UploadResult, UploadTaskInfo, UploadTaskManager,
-    UploadTaskStatus, ValidationResult, SaveOptions,
+    UploadTaskStatus, ValidationResult, SaveOptions, ImageHistoryRecord, UploadMode,
 };
 use crate::services::history_service::{
     FileOperation, HistoryQuery, HistoryStatistics, OperationType,
@@ -137,6 +137,7 @@ pub fn validate_file_paths(paths: &[String]) -> Result<(), AppError> {
 }
 
 /// Validates image IDs
+#[allow(dead_code)]
 pub fn validate_image_ids(image_ids: &[String]) -> Result<(), AppError> {
     if image_ids.is_empty() {
         return Err(AppError::Validation(
@@ -2182,6 +2183,151 @@ pub async fn get_history_statistics() -> Result<HistoryStatistics, String> {
         .map_err(|e| e.to_string())
 }
 
+// 图片历史记录命令
+#[tauri::command]
+pub async fn add_image_history_record(
+    image_name: String,
+    original_path: String,
+    uploaded_url: Option<String>,
+    upload_mode: String,
+    source_file: Option<String>,
+    success: bool,
+    file_size: u64,
+    error_message: Option<String>,
+    checksum: Option<String>,
+) -> Result<String, String> {
+    // 参数验证
+    if image_name.is_empty() {
+        return Err("Image name cannot be empty".to_string());
+    }
+    
+    if original_path.is_empty() {
+        return Err("Original path cannot be empty".to_string());
+    }
+
+    // 验证上传模式
+    let upload_mode_enum = match upload_mode.as_str() {
+        "ImageUpload" => UploadMode::ImageUpload,
+        "ArticleUpload" => UploadMode::ArticleUpload,
+        _ => return Err("Invalid upload mode".to_string()),
+    };
+
+    let history_service = HistoryService::new().map_err(|e| e.to_string())?;
+    let record = ImageHistoryRecord {
+        id: String::new(), // 服务将生成ID
+        timestamp: chrono::Utc::now(),
+        image_name,
+        original_path,
+        uploaded_url,
+        upload_mode: upload_mode_enum,
+        source_file,
+        success,
+        file_size,
+        error_message,
+        checksum,
+    };
+
+    history_service
+        .add_image_history_record(record)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn add_batch_image_history_records(
+    records: Vec<ImageHistoryRecord>
+) -> Result<Vec<String>, String> {
+    if records.is_empty() {
+        return Err("Records cannot be empty".to_string());
+    }
+
+    if records.len() > 1000 {
+        return Err("Too many records (max 1000)".to_string());
+    }
+
+    // 验证每个记录
+    for (index, record) in records.iter().enumerate() {
+        if record.image_name.is_empty() {
+            return Err(format!("Image name cannot be empty for record {}", index));
+        }
+        if record.original_path.is_empty() {
+            return Err(format!("Original path cannot be empty for record {}", index));
+        }
+    }
+
+    let history_service = HistoryService::new().map_err(|e| e.to_string())?;
+    history_service
+        .add_batch_image_history_records(records)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_image_history(
+    upload_mode: Option<String>,
+    limit: Option<usize>
+) -> Result<Vec<ImageHistoryRecord>, String> {
+    // 验证限制
+    if let Some(limit_val) = limit {
+        if limit_val == 0 || limit_val > 1000 {
+            return Err("Limit must be between 1 and 1000".to_string());
+        }
+    }
+
+    // 解析上传模式
+    let upload_mode_enum = if let Some(mode) = upload_mode {
+        match mode.as_str() {
+            "ImageUpload" => Some(UploadMode::ImageUpload),
+            "ArticleUpload" => Some(UploadMode::ArticleUpload),
+            _ => return Err("Invalid upload mode".to_string()),
+        }
+    } else {
+        None
+    };
+
+    let history_service = HistoryService::new().map_err(|e| e.to_string())?;
+    history_service
+        .get_image_history(upload_mode_enum, limit)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn delete_image_history_record(id: String) -> Result<bool, String> {
+    if id.is_empty() {
+        return Err("Record ID cannot be empty".to_string());
+    }
+
+    let history_service = HistoryService::new().map_err(|e| e.to_string())?;
+    history_service
+        .delete_image_history_record(&id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn clear_image_history(
+    upload_mode: Option<String>,
+    older_than_days: Option<u32>
+) -> Result<usize, String> {
+    // 解析上传模式
+    let upload_mode_enum = if let Some(mode) = upload_mode {
+        match mode.as_str() {
+            "ImageUpload" => Some(UploadMode::ImageUpload),
+            "ArticleUpload" => Some(UploadMode::ArticleUpload),
+            _ => return Err("Invalid upload mode".to_string()),
+        }
+    } else {
+        None
+    };
+
+    let history_service = HistoryService::new().map_err(|e| e.to_string())?;
+    history_service
+        .clear_image_history(upload_mode_enum, older_than_days)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub async fn delete_backup(backup_id: String) -> Result<bool, String> {
     // Validate input parameters
@@ -2309,6 +2455,7 @@ pub async fn get_file_size(path: String) -> Result<u64, String> {
 // Progress Monitoring Commands (moved to earlier in file)
 // ============================================================================
 
+#[allow(dead_code)]
 #[tauri::command]
 pub async fn remove_upload_progress(task_id: String) -> Result<(), String> {
     // Validate input parameters

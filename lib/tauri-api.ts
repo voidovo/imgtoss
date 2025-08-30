@@ -28,6 +28,8 @@ import type {
   ProgressNotification,
   UploadTaskInfo,
   UploadTaskManager,
+  ImageHistoryRecord,
+  UploadMode,
 } from './types';
 
 /**
@@ -370,6 +372,65 @@ export class TauriAPI {
    */
   async getFileOperations(limit?: number): Promise<FileOperation[]> {
     return invoke<FileOperation[]>('get_file_operations', { limit });
+  }
+
+  // ============================================================================
+  // 图片历史记录操作
+  // ============================================================================
+
+  /**
+   * 添加单个图片历史记录
+   */
+  async addImageHistoryRecord(
+    imageName: string,
+    originalPath: string,
+    uploadedUrl: string | undefined,
+    uploadMode: UploadMode,
+    sourceFile?: string,
+    success: boolean = true,
+    fileSize: number = 0,
+    errorMessage?: string,
+    checksum?: string
+  ): Promise<string> {
+    return invoke<string>('add_image_history_record', {
+      imageName,
+      originalPath,
+      uploadedUrl,
+      uploadMode,
+      sourceFile,
+      success,
+      fileSize,
+      errorMessage,
+      checksum,
+    });
+  }
+
+  /**
+   * 批量添加图片历史记录
+   */
+  async addBatchImageHistoryRecords(records: ImageHistoryRecord[]): Promise<string[]> {
+    return invoke<string[]>('add_batch_image_history_records', { records });
+  }
+
+  /**
+   * 获取图片历史记录
+   */
+  async getImageHistory(uploadMode?: UploadMode, limit?: number): Promise<ImageHistoryRecord[]> {
+    return invoke<ImageHistoryRecord[]>('get_image_history', { uploadMode, limit });
+  }
+
+  /**
+   * 删除图片历史记录
+   */
+  async deleteImageHistoryRecord(id: string): Promise<boolean> {
+    return invoke<boolean>('delete_image_history_record', { id });
+  }
+
+  /**
+   * 清除图片历史记录
+   */
+  async clearImageHistory(uploadMode?: UploadMode, olderThanDays?: number): Promise<number> {
+    return invoke<number>('clear_image_history', { uploadMode, olderThanDays });
   }
 
   // ============================================================================

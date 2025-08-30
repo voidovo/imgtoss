@@ -203,6 +203,25 @@ export interface HistoryRecord {
   metadata: Record<string, string>;
 }
 
+export interface ImageHistoryRecord {
+  id: string;
+  timestamp: string; // DateTime serialized as ISO string
+  image_name: string;
+  original_path: string;
+  uploaded_url?: string;
+  upload_mode: UploadMode;
+  source_file?: string; // 对于文章上传模式，记录来源Markdown文件
+  success: boolean;
+  file_size: number;
+  error_message?: string;
+  checksum?: string;
+}
+
+export enum UploadMode {
+  ImageUpload = 'ImageUpload',
+  ArticleUpload = 'ArticleUpload'
+}
+
 export interface AppState {
   current_files: string[];
   scanned_images: ImageReference[];

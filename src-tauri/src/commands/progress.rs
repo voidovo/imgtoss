@@ -22,6 +22,7 @@ impl ProgressNotifier {
         }
     }
 
+    #[allow(dead_code)]
     pub fn with_app_handle(app_handle: AppHandle) -> Self {
         let (sender, _) = broadcast::channel(1000);
         Self {
@@ -31,6 +32,7 @@ impl ProgressNotifier {
         }
     }
 
+    #[allow(dead_code)]
     pub fn set_app_handle(&mut self, app_handle: AppHandle) {
         self.app_handle = Some(app_handle);
     }
@@ -70,6 +72,7 @@ impl ProgressNotifier {
     }
 
     /// Get a receiver for progress updates
+    #[allow(dead_code)]
     pub fn subscribe(&self) -> broadcast::Receiver<UploadProgress> {
         self.sender.subscribe()
     }
@@ -94,12 +97,13 @@ impl Default for ProgressNotifier {
     }
 }
 
-/// Global progress notifier instance
+// Global progress notifier instance
 lazy_static::lazy_static! {
     pub static ref PROGRESS_NOTIFIER: ProgressNotifier = ProgressNotifier::new();
 }
 
 /// Helper function to create progress update
+#[allow(dead_code)]
 pub fn create_progress_update(
     image_id: String,
     progress: f32,

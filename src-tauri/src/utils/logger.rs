@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 use std::sync::Once;
-use tracing::{info, warn, error};
+use tracing::{info, warn};
 use tracing_subscriber::{
     fmt::{self, time::UtcTime},
     layer::SubscriberExt,
@@ -16,7 +16,9 @@ static mut WORKER_GUARD: Option<WorkerGuard> = None;
 
 #[derive(Debug, Clone)]
 pub enum LogRotation {
+    #[allow(dead_code)]
     Never,
+    #[allow(dead_code)]
     Hourly,
     Daily,
 }
@@ -206,6 +208,7 @@ impl Logger {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub fn get_config(&self) -> &LogConfig {
         &self.config
     }
@@ -225,6 +228,8 @@ pub fn init_logger(config: Option<LogConfig>) -> Result<()> {
     Ok(())
 }
 
+#[allow(dead_code)]
+#[allow(static_mut_refs)]
 pub fn get_logger() -> Option<&'static Logger> {
     unsafe { LOGGER.as_ref() }
 }
