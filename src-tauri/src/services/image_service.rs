@@ -858,13 +858,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_service_creation() {
-        let service = ImageService::new();
-        // Just verify we can create the service without panicking
-        assert!(true);
-    }
-
-    #[tokio::test]
     async fn test_thumbnail_edge_cases() {
         let temp_dir = TempDir::new().unwrap();
         let service = ImageService::new();

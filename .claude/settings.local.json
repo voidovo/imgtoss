@@ -18,7 +18,8 @@
       "Bash(pnpm build)",
       "Bash(cargo fix:*)",
       "Read(/Users/void/Library/Application Support/imgtoss/logs/**)",
-      "Read(/Users/void/Library/Application Support/imgtoss/logs/**)"
+      "Read(/Users/void/Library/Application Support/imgtoss/logs/**)",
+      "Bash(chmod:*)"
     ],
     "deny": [],
     "ask": []

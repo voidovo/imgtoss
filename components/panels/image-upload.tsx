@@ -36,12 +36,15 @@ interface UploadFile {
   filePath: string
   fileName: string
   preview: string
-  status: "pending" | "uploading" | "success" | "error"
+  status: "pending" | "uploading" | "success" | "error" | "duplicate"
   progress: number
   url?: string
   error?: string
   size: string
   fileSize: number
+  duplicateInfo?: {
+    existing_url: string
+  }
 }
 
 function ImageUpload() {
@@ -55,46 +58,10 @@ function ImageUpload() {
   const { state: appState } = useAppState()
   const config = appState.ossConfig
   
-  // 重复检测设置（延迟加载以避免阻塞）
-  const [duplicateCheckEnabled, setDuplicateCheckEnabled] = useState<boolean>(true) // 默认启用
-  
-  // 异步加载用户偏好设置
-  useEffect(() => {
-    const loadDuplicateCheckPreference = async () => {
-      try {
-        // 使用 setTimeout 延迟加载，避免阻塞主线程
-        setTimeout(() => {
-          try {
-            const preference = getUserPreference('duplicateCheckEnabled')
-            const enabled = preference !== undefined ? preference : true
-            setDuplicateCheckEnabled(enabled)
-            console.log('[DuplicateCheck] 重复检测状态加载完成:', enabled)
-          } catch (error) {
-            console.warn('[DuplicateCheck] 加载偏好设置失败，使用默认值:', error)
-          }
-        }, 200) // 延迟 200ms 避免阻塞页面渲染
-      } catch (error) {
-        console.error('[DuplicateCheck] 偏好设置加载异常:', error)
-      }
-    }
-    
-    loadDuplicateCheckPreference()
-  }, [])
   
   // 简化的上传路径
   const uploadPath = "images/"
 
-  // 更新重复检测设置
-  const updateDuplicateCheckEnabled = (enabled: boolean) => {
-    console.log('[DuplicateCheck] 更新重复检测状态为:', enabled)
-    setDuplicateCheckEnabled(enabled)
-    try {
-      setUserPreference('duplicateCheckEnabled', enabled)
-      console.log('[DuplicateCheck] 偏好设置保存成功')
-    } catch (error) {
-      console.error('[DuplicateCheck] 保存偏好设置失败:', error)
-    }
-  }
 
   // Progress monitoring hook
   const {
@@ -344,11 +311,10 @@ function ImageUpload() {
 
   const handleFiles = useCallback(async (uploadFiles: UploadFile[]) => {
 
-    // 如果启用了重复检测，进行哈希值检测
-    console.log('[DuplicateCheck] Checking if duplicate detection is enabled:', duplicateCheckEnabled)
-    console.log('[DuplicateCheck] Number of upload files:', uploadFiles.length)
+    // 进行重复检测
+    console.log('[DuplicateCheck] Starting duplicate detection for:', uploadFiles.length, 'files')
     
-    if (duplicateCheckEnabled && uploadFiles.length > 0) {
+    if (uploadFiles.length > 0) {
       console.log('[DuplicateCheck] Starting hash-based duplicate detection')
       
       try {
@@ -370,8 +336,10 @@ function ImageUpload() {
             console.log(`[DuplicateCheck] File ${file.fileName} is marked as duplicate`)
             return {
               ...file,
-              status: "error" as const,
-              error: `重复图片 - 已存在: ${duplicateResult.existing_url || '未知链接'}`
+              status: "duplicate" as const,
+              duplicateInfo: {
+                existing_url: duplicateResult.existing_url || ''
+              }
             }
           }
           console.log(`[DuplicateCheck] File ${file.fileName} is not duplicate`)
@@ -381,14 +349,9 @@ function ImageUpload() {
         console.log('[DuplicateCheck] Files with duplicate status:', filesWithDuplicateStatus)
         setFiles((prev) => [...prev, ...filesWithDuplicateStatus])
 
-        // 如果有重复文件，显示提示
+        // 统计重复文件数量
         const duplicateCount = duplicateResults.filter(r => r.is_duplicate).length
         console.log('[DuplicateCheck] Total duplicate files found:', duplicateCount)
-        
-        if (duplicateCount > 0) {
-          console.log('[DuplicateCheck] Showing duplicate files alert')
-          alert(`检测到 ${duplicateCount} 个重复图片，已自动标记。您可以选择移除这些重复文件。`)
-        }
       } catch (error) {
         console.error("[DuplicateCheck] Duplicate detection failed with error:", error)
         
@@ -398,11 +361,11 @@ function ImageUpload() {
         alert(`重复检测失败: ${error}。文件已添加但建议手动检查是否重复。`)
       }
     } else {
-      console.log('[DuplicateCheck] Duplicate detection disabled or no files, adding files directly')
-      // 如果未启用重复检测，直接添加文件
+      console.log('[DuplicateCheck] No files to check, adding files directly')
+      // 如果没有文件，直接添加
       setFiles((prev) => [...prev, ...uploadFiles])
     }
-  }, [duplicateCheckEnabled])
+  }, [])
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault()
@@ -482,68 +445,84 @@ function ImageUpload() {
     setIsUploading(true)
 
     try {
-      // Mark files as uploading
+      // 分离出需要真正上传的文件（非重复文件）
+      const filesToActuallyUpload = filesToUpload.filter(f => f.status !== "duplicate")
+      const duplicateFiles = filesToUpload.filter(f => f.status === "duplicate")
+      
+      console.log(`[Upload] Total files: ${filesToUpload.length}, To upload: ${filesToActuallyUpload.length}, Duplicates: ${duplicateFiles.length}`)
+
+      // Mark all files as processing
       setFiles(prev =>
-        prev.map(f =>
-          filesToUpload.some(upload => upload.id === f.id)
-            ? { ...f, status: "uploading" as const, progress: 0 }
-            : f
-        )
-      )
-
-      // 准备上传数据：(file_id, file_path) 元组
-      const imageData: [string, string][] = filesToUpload.map(f => [f.id, f.filePath])
-
-      // 使用新的upload_images_with_ids接口，确保ID一致性
-      const results = await tauriAPI.uploadImagesWithIds(imageData, config)
-
-      // 基于ID直接匹配结果（现在ID是一致的）
-      setFiles(prev =>
-        prev.map(file => {
-          const uploadFile = filesToUpload.find(f => f.id === file.id)
-          if (!uploadFile) return file
-
-          // 直接通过ID匹配结果
-          const result = results.find(r => r.image_id === file.id)
-          
-          if (result) {
-            return {
-              ...file,
-              status: result.success ? "success" as const : "error" as const,
-              progress: result.success ? 100 : file.progress,
-              url: result.uploaded_url,
-              error: result.error,
+        prev.map(f => {
+          if (filesToUpload.some(upload => upload.id === f.id)) {
+            if (f.status === "duplicate") {
+              // 重复文件直接标记为成功，使用已存在的URL
+              return { 
+                ...f, 
+                status: "success" as const, 
+                progress: 100,
+                url: f.duplicateInfo?.existing_url
+              }
+            } else {
+              // 非重复文件标记为上传中
+              return { ...f, status: "uploading" as const, progress: 0 }
             }
           }
-          return file
+          return f
         })
       )
 
-      // 为每个成功上传的图片添加历史记录
-      try {
-        for (const result of results) {
-          if (result.success && result.uploaded_url) {
-            const uploadFile = filesToUpload.find(f => f.id === result.image_id)
-            if (uploadFile) {
-              await tauriAPI.addImageHistoryRecord(
-                uploadFile.fileName,
-                uploadFile.filePath,
-                result.uploaded_url,
-                UploadMode.ImageUpload, // 图片上传模式
-                undefined, // 没有来源文件
-                true,
-                uploadFile.fileSize || 0,
-                undefined,
-                undefined // 可以考虑添加文件校验和
-              )
+      // 只上传非重复的文件
+      if (filesToActuallyUpload.length > 0) {
+        const imageData: [string, string][] = filesToActuallyUpload.map(f => [f.id, f.filePath])
+        const results = await tauriAPI.uploadImagesWithIds(imageData, config)
+
+        // 更新上传结果
+        setFiles(prev =>
+          prev.map(file => {
+            const uploadFile = filesToActuallyUpload.find(f => f.id === file.id)
+            if (!uploadFile) return file
+
+            const result = results.find(r => r.image_id === file.id)
+            
+            if (result) {
+              return {
+                ...file,
+                status: result.success ? "success" as const : "error" as const,
+                progress: result.success ? 100 : file.progress,
+                url: result.uploaded_url,
+                error: result.error,
+              }
+            }
+            return file
+          })
+        )
+
+        // 为成功上传的图片添加历史记录
+        try {
+          for (const result of results) {
+            if (result.success && result.uploaded_url) {
+              const uploadFile = filesToActuallyUpload.find(f => f.id === result.image_id)
+              if (uploadFile) {
+                await tauriAPI.addImageHistoryRecord(
+                  uploadFile.fileName,
+                  uploadFile.filePath,
+                  result.uploaded_url,
+                  UploadMode.ImageUpload,
+                  undefined,
+                  true,
+                  uploadFile.fileSize || 0,
+                  undefined,
+                  undefined
+                )
+              }
             }
           }
-        }
 
-        // 刷新历史记录显示
-        await refreshHistory()
-      } catch (error) {
-        console.warn("Failed to save image history records:", error)
+          await refreshHistory()
+        } catch (error) {
+          console.warn("Failed to save image history records:", error)
+        }
       }
 
     } catch (error) {
@@ -590,10 +569,13 @@ function ImageUpload() {
     // 只上传状态为 "pending" 的文件（排除重复文件）
     const pendingFiles = files.filter((f) => f.status === "pending")
     if (pendingFiles.length === 0) {
+      const duplicateCount = files.filter((f) => f.status === "duplicate").length
       const errorFiles = files.filter((f) => f.status === "error")
-      if (errorFiles.length > 0) {
-        // Use alert instead of notification system for now
-        alert("没有可上传的文件。请移除重复或错误的文件后重试。")
+      
+      if (duplicateCount > 0 && errorFiles.length === 0) {
+        alert(`所有图片都是重复的（${duplicateCount} 个），已自动使用已存在的链接。`)
+      } else if (errorFiles.length > 0) {
+        alert("没有可上传的文件。请移除错误的文件后重试。")
       } else {
         alert("请先选择要上传的图片文件。")
       }
@@ -645,13 +627,13 @@ function ImageUpload() {
 
   const removeDuplicateFiles = () => {
     setFiles(prev => {
-      const filesToRemove = prev.filter(f => f.status === "error" && f.error?.includes("重复"))
+      const filesToRemove = prev.filter(f => f.status === "duplicate")
       filesToRemove.forEach(file => {
         if (file.preview) {
           URL.revokeObjectURL(file.preview)
         }
       })
-      return prev.filter(f => !(f.status === "error" && f.error?.includes("重复")))
+      return prev.filter(f => f.status !== "duplicate")
     })
   }
 
@@ -683,6 +665,7 @@ function ImageUpload() {
   const successFiles = files.filter((f) => f.status === "success").length
   const errorFiles = files.filter((f) => f.status === "error").length
   const uploadingFiles = files.filter((f) => f.status === "uploading").length
+  const duplicateFiles = files.filter((f) => f.status === "duplicate").length
 
   return (
     <div className="space-y-6">
@@ -833,10 +816,10 @@ function ImageUpload() {
                 >
                   {isUploading ? "上传中..." : "开始上传"}
                 </Button>
-                {files.some(f => f.status === "error" && f.error?.includes("重复")) && (
+                {files.some(f => f.status === "duplicate") && (
                   <Button variant="outline" onClick={removeDuplicateFiles}>
                     <AlertCircle className="h-4 w-4 mr-2" />
-                    移除重复
+                    移除重复 ({duplicateFiles})
                   </Button>
                 )}
                 {files.some(f => f.status === "error") && (
@@ -899,7 +882,22 @@ function ImageUpload() {
                         </Button>
                       </div>
                     )}
+                    {file.status === "duplicate" && file.duplicateInfo && (
+                      <div className="flex items-center gap-2 mt-2">
+                        <Button size="sm" variant="outline" onClick={() => copyUrl(file.duplicateInfo!.existing_url)}>
+                          <Copy className="h-3 w-3 mr-1" />
+                          复制已存在链接
+                        </Button>
+                      </div>
+                    )}
                     {file.error && <p className="text-sm text-red-600 mt-1">{file.error}</p>}
+                    {file.status === "duplicate" && file.duplicateInfo?.existing_url && (
+                      <p className="text-sm text-yellow-700 dark:text-yellow-300 mt-1">
+                        已存在: {file.duplicateInfo.existing_url.length > 40 ? 
+                          file.duplicateInfo.existing_url.substring(0, 40) + '...' : 
+                          file.duplicateInfo.existing_url}
+                      </p>
+                    )}
                   </div>
                   <div className="flex items-center gap-2">
                     <Badge
@@ -910,13 +908,23 @@ function ImageUpload() {
                             ? "destructive"
                             : file.status === "uploading"
                               ? "secondary"
-                              : "outline"
+                              : file.status === "duplicate"
+                                ? "secondary"
+                                : "outline"
+                      }
+                      className={
+                        file.status === "duplicate" 
+                          ? "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200"
+                          : file.status === "success"
+                          ? "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200"
+                          : ""
                       }
                     >
                       {file.status === "pending" && "待上传"}
                       {file.status === "uploading" && "上传中"}
                       {file.status === "success" && "成功"}
                       {file.status === "error" && "失败"}
+                      {file.status === "duplicate" && "重复"}
                     </Badge>
                     <Button size="sm" variant="ghost" onClick={() => removeFile(file.id)}>
                       <X className="h-4 w-4" />

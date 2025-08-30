@@ -46,6 +46,7 @@ interface ProcessingState {
   processingProgress: number
   error: string | null
   successMessage: string | null
+  duplicateResults: Map<string, { is_duplicate: boolean; existing_url?: string }>
 }
 
 function ArticleUpload() {
@@ -59,6 +60,7 @@ function ArticleUpload() {
     processingProgress: 0,
     error: null,
     successMessage: null,
+    duplicateResults: new Map(),
   })
 
   const [selectedProvider, setSelectedProvider] = useState<OSSProvider>(OSSProvider.Aliyun)
@@ -290,6 +292,12 @@ function ArticleUpload() {
         isScanning: false,
         selectedImages: new Set()
       }))
+
+      // 在扫描完成后进行重复检查
+      const allImages = results.flatMap(result => result.images).filter(img => img.exists)
+      if (allImages.length > 0) {
+        await checkDuplicatesForImages(allImages)
+      }
     } catch (error) {
       setState(prev => ({
         ...prev,
@@ -298,6 +306,43 @@ function ArticleUpload() {
       }))
     }
   }, [state.selectedFiles])
+
+  // 检查图片重复的函数
+  const checkDuplicatesForImages = async (images: any[]) => {
+    try {
+      console.log('[ArticleUpload] Starting duplicate check for', images.length, 'images')
+      
+      // 获取图片路径用于重复检测
+      const filePaths = images.map(img => img.absolute_path)
+      
+      // 调用后端批量重复检测
+      const duplicateResults = await tauriAPI.checkDuplicatesBatch(filePaths)
+      
+      // 将结果转换为Map方便查找
+      const duplicateMap = new Map()
+      images.forEach((img, index) => {
+        const duplicateResult = duplicateResults[index]
+        duplicateMap.set(img.id, {
+          is_duplicate: duplicateResult?.is_duplicate || false,
+          existing_url: duplicateResult?.existing_url
+        })
+      })
+      
+      setState(prev => ({
+        ...prev,
+        duplicateResults: duplicateMap
+      }))
+      
+      // 统计重复图片数量并提示用户
+      const duplicateCount = duplicateResults.filter(r => r.is_duplicate).length
+      if (duplicateCount > 0) {
+        console.log('[ArticleUpload] Found', duplicateCount, 'duplicate images')
+      }
+    } catch (error) {
+      console.error('[ArticleUpload] Duplicate check failed:', error)
+      // 即使重复检查失败也不影响正常流程
+    }
+  }
 
   const handleImageSelect = (imageId: string, checked: boolean) => {
     setState(prev => {
@@ -335,8 +380,24 @@ function ArticleUpload() {
     setState(prev => ({ ...prev, isProcessing: true, processingProgress: 0, error: null }))
 
     try {
-      // Step 1: Upload selected images
-      const selectedImages = detectedImages.filter(img => state.selectedImages.has(img.id))
+      // Step 1: Filter out duplicate images and prepare for upload
+      const selectedImages = detectedImages.filter(img => {
+        const isSelected = state.selectedImages.has(img.id)
+        const duplicateResult = state.duplicateResults.get(img.id)
+        const isDuplicate = duplicateResult?.is_duplicate || false
+        
+        if (isSelected && isDuplicate) {
+          console.log(`[ArticleUpload] Skipping duplicate image: ${img.original_path}`)
+          return false
+        }
+        return isSelected
+      })
+      
+      if (selectedImages.length === 0) {
+        setState(prev => ({ ...prev, error: "No non-duplicate images selected for upload", isProcessing: false }))
+        return
+      }
+      
       const imageData: [string, string][] = selectedImages.map(img => [img.id, img.absolute_path])
       setState(prev => ({ ...prev, processingProgress: 25 }))
 
@@ -349,15 +410,29 @@ function ArticleUpload() {
       for (const result of state.scanResults) {
         for (const image of result.images) {
           if (state.selectedImages.has(image.id)) {
-            const uploadResult = uploadResults.find(ur => ur.image_id === image.id)
-            if (uploadResult?.success && uploadResult.uploaded_url) {
+            // 检查是否是重复图片
+            const duplicateResult = state.duplicateResults.get(image.id)
+            if (duplicateResult?.is_duplicate && duplicateResult.existing_url) {
+              // 对于重复图片，使用已存在的URL进行替换
               replacements.push({
                 file_path: result.file_path,
                 line: image.markdown_line,
                 column: image.markdown_column,
                 old_link: image.original_path,
-                new_link: uploadResult.uploaded_url
+                new_link: duplicateResult.existing_url
               })
+            } else {
+              // 对于非重复图片，使用上传后的URL
+              const uploadResult = uploadResults.find(ur => ur.image_id === image.id)
+              if (uploadResult?.success && uploadResult.uploaded_url) {
+                replacements.push({
+                  file_path: result.file_path,
+                  line: image.markdown_line,
+                  column: image.markdown_column,
+                  old_link: image.original_path,
+                  new_link: uploadResult.uploaded_url
+                })
+              }
             }
           }
         }
@@ -370,11 +445,24 @@ function ArticleUpload() {
         await tauriAPI.replaceMarkdownLinksWithResult(replacements)
       }
 
+      const duplicateCount = Array.from(state.selectedImages).filter(id => {
+        const duplicateResult = state.duplicateResults.get(id)
+        return duplicateResult?.is_duplicate
+      }).length
+      
+      const uploadedCount = selectedImages.length
+      const totalProcessed = replacements.length
+      
+      let successMsg = `Successfully processed ${totalProcessed} images in ${state.scanResults.length} files`
+      if (duplicateCount > 0) {
+        successMsg += ` (${duplicateCount} duplicates used existing URLs, ${uploadedCount} newly uploaded)`
+      }
+
       setState(prev => ({
         ...prev,
         processingProgress: 100,
         isProcessing: false,
-        successMessage: `Successfully processed ${replacements.length} images in ${state.scanResults.length} files`
+        successMessage: successMsg
       }))
 
       setShowImageModal(false)
@@ -729,7 +817,11 @@ function ArticleUpload() {
 
             <ScrollArea className="h-96">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pr-4">
-                {detectedImages.map((image) => (
+                {detectedImages.map((image) => {
+                  const duplicateResult = state.duplicateResults.get(image.id)
+                  const isDuplicate = duplicateResult?.is_duplicate || false
+                  
+                  return (
                   <div key={image.id} className="border rounded-lg p-4 space-y-3">
                     <div className="flex items-start gap-3">
                       <Checkbox
@@ -772,15 +864,30 @@ function ArticleUpload() {
                             <span className="text-xs text-gray-500">
                               {image.exists ? formatFileSizeHuman(image.size) : "File not found"}
                             </span>
-                            <Badge variant={image.exists ? "default" : "destructive"}>
-                              {image.exists ? "可用" : "缺失"}
-                            </Badge>
+                            <div className="flex gap-2">
+                              <Badge variant={image.exists ? "default" : "destructive"}>
+                                {image.exists ? "可用" : "缺失"}
+                              </Badge>
+                              {isDuplicate && (
+                                <Badge variant="secondary" className="bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200">
+                                  重复
+                                </Badge>
+                              )}
+                            </div>
                           </div>
+                          {isDuplicate && duplicateResult?.existing_url && (
+                            <div className="text-xs text-yellow-700 dark:text-yellow-300 mt-1">
+                              已存在: {duplicateResult.existing_url.length > 50 ? 
+                                duplicateResult.existing_url.substring(0, 50) + '...' : 
+                                duplicateResult.existing_url}
+                            </div>
+                          )}
                         </div>
                       </div>
                     </div>
                   </div>
-                ))}
+                  )
+                })}
               </div>
             </ScrollArea>
           </div>

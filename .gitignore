@@ -26,5 +26,9 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
+# vitepress
+docs/node_modules
+docs/.vitepress
+
 .DS_Store
 */.DS_Store

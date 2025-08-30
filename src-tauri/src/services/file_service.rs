@@ -849,11 +849,6 @@ This should be ignored: ![Remote](https://example.com/image.png)
         async_fs::write(&old_backup, "old content").await.unwrap();
         async_fs::write(&recent_backup, "recent content").await.unwrap();
         
-        // Modify the old backup's timestamp to be older
-        let old_time = SystemTime::now()
-            .checked_sub(std::time::Duration::from_secs(10 * 24 * 60 * 60)) // 10 days ago
-            .unwrap();
-        
         // Note: Setting file times requires platform-specific code
         // For this test, we'll just verify the function runs without error
         let cleaned_count = service.clean_old_backups(7).await.unwrap();
