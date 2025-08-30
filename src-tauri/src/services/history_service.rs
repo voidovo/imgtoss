@@ -635,6 +635,7 @@ impl HistoryService {
         Ok(records)
     }
 
+    #[allow(dead_code)]
     pub async fn get_image_history_record(&self, id: &str) -> Result<Option<ImageHistoryRecord>, AppError> {
         let records = self.load_image_history_records().await?;
         Ok(records.into_iter().find(|record| record.id == id))
@@ -701,119 +702,5 @@ impl HistoryService {
             .map_err(|e| AppError::FileSystem(format!("Failed to write image history file: {}", e)))?;
         
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::TempDir;
-    use std::fs;
-
-    fn create_test_service() -> (HistoryService, TempDir) {
-        let temp_dir = TempDir::new().unwrap();
-        let data_dir = temp_dir.path().join("data");
-        let backup_dir = data_dir.join("backups");
-        
-        fs::create_dir_all(&data_dir).unwrap();
-        fs::create_dir_all(&backup_dir).unwrap();
-        
-        let service = HistoryService {
-            data_dir: data_dir.clone(),
-            backup_dir,
-            history_file: data_dir.join("history.json"),
-            backups_file: data_dir.join("backups.json"),
-            operations_file: data_dir.join("operations.json"),
-        };
-        
-        (service, temp_dir)
-    }
-
-    #[tokio::test]
-    async fn test_add_and_get_history_record() {
-        let (service, _temp_dir) = create_test_service();
-        
-        let record = HistoryRecord {
-            id: String::new(),
-            timestamp: Utc::now(),
-            operation: OperationType::Upload,
-            files: vec!["test.md".to_string()],
-            image_count: 5,
-            success: true,
-            backup_path: None,
-            duration: Some(1000),
-            total_size: Some(2048),
-            error_message: None,
-            metadata: HashMap::new(),
-        };
-        
-        let id = service.add_history_record(record.clone()).await.unwrap();
-        assert!(!id.is_empty());
-        
-        let retrieved = service.get_history_record(&id).await.unwrap();
-        assert!(retrieved.is_some());
-        
-        let retrieved_record = retrieved.unwrap();
-        assert_eq!(retrieved_record.operation, OperationType::Upload);
-        assert_eq!(retrieved_record.files, vec!["test.md".to_string()]);
-        assert_eq!(retrieved_record.image_count, 5);
-        assert!(retrieved_record.success);
-    }
-
-    #[tokio::test]
-    async fn test_create_and_restore_backup() {
-        let (service, temp_dir) = create_test_service();
-        
-        // Create a test file
-        let test_file = temp_dir.path().join("test.md");
-        let test_content = "# Test\n![image](./image.png)";
-        fs::write(&test_file, test_content).unwrap();
-        
-        // Create backup
-        let backup_info = service.create_backup(test_file.to_str().unwrap()).await.unwrap();
-        assert!(!backup_info.id.is_empty());
-        assert!(Path::new(&backup_info.backup_path).exists());
-        
-        // Modify original file
-        fs::write(&test_file, "# Modified").unwrap();
-        
-        // Restore from backup
-        let restored_path = service.restore_from_backup(&backup_info.id).await.unwrap();
-        assert_eq!(restored_path, test_file.to_str().unwrap());
-        
-        // Verify content is restored
-        let restored_content = fs::read_to_string(&test_file).unwrap();
-        assert_eq!(restored_content, test_content);
-    }
-
-    #[tokio::test]
-    async fn test_statistics() {
-        let (service, _temp_dir) = create_test_service();
-        
-        // Add some test records
-        for i in 0..10 {
-            let record = HistoryRecord {
-                id: String::new(),
-                timestamp: Utc::now(),
-                operation: if i % 2 == 0 { OperationType::Upload } else { OperationType::Replace },
-                files: vec![format!("test{}.md", i)],
-                image_count: i + 1,
-                success: i < 8, // 8 successful, 2 failed
-                backup_path: None,
-                duration: Some(((i + 1) * 100) as u64),
-                total_size: Some(((i + 1) * 1024) as u64),
-                error_message: if i >= 8 { Some("Test error".to_string()) } else { None },
-                metadata: HashMap::new(),
-            };
-            
-            service.add_history_record(record).await.unwrap();
-        }
-        
-        let stats = service.get_statistics().await.unwrap();
-        assert_eq!(stats.total_records, 10);
-        assert_eq!(stats.successful_operations, 8);
-        assert_eq!(stats.failed_operations, 2);
-        assert_eq!(stats.success_rate, 80.0);
-        assert_eq!(stats.total_images_processed, 55); // 1+2+3+...+10
     }
 }

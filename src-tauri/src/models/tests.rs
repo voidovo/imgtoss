@@ -1,7 +1,6 @@
 #[cfg(test)]
 mod tests {
     use crate::models::*;
-    use std::time::SystemTime;
 
     #[test]
     fn test_image_reference_creation() {

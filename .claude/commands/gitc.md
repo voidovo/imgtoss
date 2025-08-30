@@ -12,7 +12,7 @@ description: 创建 git 提交
 
 ## 您的任务
 
-基于上述更改，创建一个 git 提交，使用中文编写 commit 记录。
+将当前所有文件更改 add 加入暂存，分析这些 changes 并创建一个 git 提交，使用中文编写 commit 记录。
 
 ## 要求
 
