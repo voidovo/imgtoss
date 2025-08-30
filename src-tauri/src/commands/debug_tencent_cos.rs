@@ -3,7 +3,6 @@
 
 use crate::models::OSSConfig;
 use reqwest::Client;
-use std::collections::HashMap;
 use std::time::Duration;
 
 pub async fn debug_tencent_cos_connection(config: &OSSConfig) -> Result<(), String> {
@@ -283,6 +282,7 @@ async fn test_authenticated_service_request(config: &OSSConfig) -> Result<(), St
     Ok(())
 }
 
+#[allow(dead_code)]
 async fn test_authenticated_request(config: &OSSConfig) -> Result<(), String> {
     println!("🔍 测试带签名的认证请求...");
     

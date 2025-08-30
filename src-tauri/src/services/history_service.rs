@@ -2,11 +2,11 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
 use crate::utils::error::AppError;
+use crate::models::{ImageHistoryRecord, UploadMode};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HistoryRecord {
@@ -77,11 +77,13 @@ pub struct HistoryStatistics {
 }
 
 pub struct HistoryService {
+    #[allow(dead_code)]
     data_dir: PathBuf,
     backup_dir: PathBuf,
     history_file: PathBuf,
     backups_file: PathBuf,
     operations_file: PathBuf,
+    image_history_file: PathBuf, // 新增图片历史记录文件
 }
 
 impl HistoryService {
@@ -98,6 +100,7 @@ impl HistoryService {
         let history_file = data_dir.join("history.json");
         let backups_file = data_dir.join("backups.json");
         let operations_file = data_dir.join("operations.json");
+        let image_history_file = data_dir.join("image_history.json"); // 新增图片历史记录文件
 
         Ok(Self {
             data_dir,
@@ -105,6 +108,7 @@ impl HistoryService {
             history_file,
             backups_file,
             operations_file,
+            image_history_file,
         })
     }
 
@@ -174,11 +178,13 @@ impl HistoryService {
         Ok(records)
     }
 
+    #[allow(dead_code)]
     pub async fn get_history_record(&self, id: &str) -> Result<Option<HistoryRecord>, AppError> {
         let records = self.load_history_records().await?;
         Ok(records.into_iter().find(|r| r.id == id))
     }
 
+    #[allow(dead_code)]
     pub async fn update_history_record(&self, id: &str, updates: HashMap<String, serde_json::Value>) -> Result<bool, AppError> {
         let mut records = self.load_history_records().await?;
         
@@ -220,6 +226,7 @@ impl HistoryService {
         }
     }
 
+    #[allow(dead_code)]
     pub async fn delete_history_record(&self, id: &str) -> Result<bool, AppError> {
         let mut records = self.load_history_records().await?;
         let initial_len = records.len();
@@ -420,6 +427,7 @@ impl HistoryService {
         Ok(None)
     }
 
+    #[allow(dead_code)]
     pub async fn get_duplicates_by_checksum(&self, checksums: &[String]) -> Result<Vec<(String, HistoryRecord)>, AppError> {
         let records = self.load_history_records().await?;
         let mut duplicates = Vec::new();
@@ -575,6 +583,122 @@ impl HistoryService {
         
         fs::write(&self.operations_file, content)
             .map_err(|e| AppError::FileSystem(format!("Failed to write operations file: {}", e)))?;
+        
+        Ok(())
+    }
+
+    // 图片历史记录相关方法
+    pub async fn add_image_history_record(&self, mut record: ImageHistoryRecord) -> Result<String, AppError> {
+        if record.id.is_empty() {
+            record.id = Uuid::new_v4().to_string();
+        }
+        
+        let mut records = self.load_image_history_records().await?;
+        records.push(record.clone());
+        self.save_image_history_records(&records).await?;
+        
+        Ok(record.id)
+    }
+
+    pub async fn add_batch_image_history_records(&self, mut records: Vec<ImageHistoryRecord>) -> Result<Vec<String>, AppError> {
+        let mut ids = Vec::new();
+        for record in &mut records {
+            if record.id.is_empty() {
+                record.id = Uuid::new_v4().to_string();
+            }
+            ids.push(record.id.clone());
+        }
+        
+        let mut existing_records = self.load_image_history_records().await?;
+        existing_records.extend(records);
+        self.save_image_history_records(&existing_records).await?;
+        
+        Ok(ids)
+    }
+
+    pub async fn get_image_history(&self, upload_mode: Option<UploadMode>, limit: Option<usize>) -> Result<Vec<ImageHistoryRecord>, AppError> {
+        let mut records = self.load_image_history_records().await?;
+        
+        // 按上传模式过滤
+        if let Some(mode) = upload_mode {
+            records.retain(|record| record.upload_mode == mode);
+        }
+        
+        // 按时间倒序排列
+        records.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+        
+        // 应用限制
+        if let Some(limit) = limit {
+            records.truncate(limit);
+        }
+        
+        Ok(records)
+    }
+
+    pub async fn get_image_history_record(&self, id: &str) -> Result<Option<ImageHistoryRecord>, AppError> {
+        let records = self.load_image_history_records().await?;
+        Ok(records.into_iter().find(|record| record.id == id))
+    }
+
+    pub async fn delete_image_history_record(&self, id: &str) -> Result<bool, AppError> {
+        let mut records = self.load_image_history_records().await?;
+        let original_count = records.len();
+        records.retain(|record| record.id != id);
+        
+        if records.len() != original_count {
+            self.save_image_history_records(&records).await?;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
+    pub async fn clear_image_history(&self, upload_mode: Option<UploadMode>, older_than_days: Option<u32>) -> Result<usize, AppError> {
+        let mut records = self.load_image_history_records().await?;
+        let original_count = records.len();
+        
+        if let Some(days) = older_than_days {
+            let cutoff_date = Utc::now() - chrono::Duration::days(days as i64);
+            records.retain(|record| {
+                let should_keep_by_date = record.timestamp > cutoff_date;
+                let should_keep_by_mode = upload_mode.as_ref().map_or(true, |mode| record.upload_mode != *mode);
+                should_keep_by_date || should_keep_by_mode
+            });
+        } else if let Some(mode) = upload_mode {
+            records.retain(|record| record.upload_mode != mode);
+        } else {
+            records.clear();
+        }
+        
+        let deleted_count = original_count - records.len();
+        if deleted_count > 0 {
+            self.save_image_history_records(&records).await?;
+        }
+        
+        Ok(deleted_count)
+    }
+
+    // 私有辅助方法
+    async fn load_image_history_records(&self) -> Result<Vec<ImageHistoryRecord>, AppError> {
+        if !self.image_history_file.exists() {
+            return Ok(Vec::new());
+        }
+        
+        let content = fs::read_to_string(&self.image_history_file)
+            .map_err(|e| AppError::FileSystem(format!("Failed to read image history file: {}", e)))?;
+        
+        let records: Vec<ImageHistoryRecord> = serde_json::from_str(&content)
+            .map_err(AppError::Serialization)?;
+        
+        Ok(records)
+    }
+
+    async fn save_image_history_records(&self, records: &[ImageHistoryRecord]) -> Result<(), AppError> {
+        let content = serde_json::to_string_pretty(records)
+            .map_err(AppError::Serialization)?;
+        
+        fs::write(&self.image_history_file, content)
+            .map_err(|e| AppError::FileSystem(format!("Failed to write image history file: {}", e)))?;
         
         Ok(())
     }

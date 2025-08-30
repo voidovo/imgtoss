@@ -229,6 +229,27 @@ pub struct HistoryRecord {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImageHistoryRecord {
+    pub id: String,
+    pub timestamp: chrono::DateTime<chrono::Utc>,
+    pub image_name: String,
+    pub original_path: String,
+    pub uploaded_url: Option<String>,
+    pub upload_mode: UploadMode,
+    pub source_file: Option<String>, // 对于文章上传模式，记录来源Markdown文件
+    pub success: bool,
+    pub file_size: u64,
+    pub error_message: Option<String>,
+    pub checksum: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum UploadMode {
+    ImageUpload,
+    ArticleUpload,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppState {
     pub current_files: Vec<String>,
     pub scanned_images: Vec<ImageReference>,
@@ -291,6 +312,7 @@ impl Default for AppState {
 }
 
 impl UploadTask {
+    #[allow(dead_code)]
     pub fn new(image_id: String) -> Self {
         Self {
             id: uuid::Uuid::new_v4().to_string(),
@@ -460,6 +482,7 @@ impl Default for NotificationConfig {
 }
 
 impl UploadTaskInfo {
+    #[allow(dead_code)]
     pub fn new(image_path: String, max_retries: u32) -> Self {
         let id = uuid::Uuid::new_v4().to_string();
         Self {

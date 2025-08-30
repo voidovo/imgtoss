@@ -24,6 +24,7 @@ pub enum AppError {
     Serialization(#[from] serde_json::Error),
     
     #[error("Encryption error: {0}")]
+    #[allow(dead_code)]
     Encryption(String),
     
     #[error("Regex error: {0}")]
@@ -39,12 +40,15 @@ pub enum AppError {
     Security(String),
     
     #[error("Task not found: {0}")]
+    #[allow(dead_code)]
     TaskNotFound(String),
     
     #[error("Operation cancelled")]
+    #[allow(dead_code)]
     Cancelled,
     
     #[error("Permission denied: {0}")]
+    #[allow(dead_code)]
     PermissionDenied(String),
 }
 

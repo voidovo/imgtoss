@@ -25,7 +25,7 @@ import { FilenameDisplay } from "@/components/ui/filename-display"
 import { formatFileSizeHuman } from "@/lib/utils/format"
 import { getArticleUploadProvider, setArticleUploadProvider } from "@/lib/utils/user-preferences"
 import type { ScanResult, ImageReference, LinkReplacement, OSSConfig, HistoryRecord } from "@/lib/types"
-import { OSSProvider } from "@/lib/types"
+import { OSSProvider, UploadMode } from "@/lib/types"
 import { copyToClipboardWithToast } from "@/lib/utils/copy-to-clipboard"
 import { useAppState } from "@/lib/contexts/app-state-context"
 
@@ -71,12 +71,17 @@ function ArticleUpload() {
 
   // 延迟初始化，避免阻塞页面渲染
   React.useEffect(() => {
-    if (!appState.isInitialized) return
+    if (!appState.isInitialized) {
+      console.log('[ArticleUpload] App not initialized yet, waiting...')
+      return
+    }
 
     // 延迟执行非关键初始化
     const initializeWithDelay = () => {
       setTimeout(async () => {
         try {
+          console.log('[ArticleUpload] Starting initialization...')
+          
           // 设置可用的供应商列表（目前只有当前配置的供应商）
           if (ossConfig) {
             setAvailableProviders([ossConfig.provider])
@@ -90,28 +95,124 @@ function ArticleUpload() {
                 setSelectedProvider(ossConfig.provider)
               }
             } catch (error) {
-              console.warn("Failed to load article upload provider preference:", error)
+              console.warn("[ArticleUpload] Failed to load article upload provider preference:", error)
               setSelectedProvider(ossConfig.provider)
             }
           }
 
           // 并行加载历史记录
-          try {
-            const result = await historyOperations.searchHistory(
-              undefined, "replace", true, undefined, undefined, 1, 3
-            )
-            setRecentHistory(result.items || [])
-          } catch (error) {
-            console.warn("Failed to load recent history:", error)
-          }
+          console.log('[ArticleUpload] Loading history records...')
+          await loadHistoryWithFallback()
         } catch (error) {
-          console.warn("Article upload initialization failed:", error)
+          console.error('[ArticleUpload] Critical initialization failed:', error)
         }
       }, 250) // 延迟 250ms 避免阻塞渲染
     }
     
     initializeWithDelay()
   }, [appState.isInitialized, ossConfig])
+
+  // 从历史记录加载，支持备选方案
+  const loadHistoryWithFallback = async () => {
+    try {
+      console.log('[ArticleUpload] Trying to load image history...')
+      // 首先尝试加载图片历史记录
+      const imageHistory = await tauriAPI.getImageHistory(UploadMode.ArticleUpload, 5)
+      console.log('[ArticleUpload] Image history loaded:', imageHistory.length, 'records')
+      
+      if (imageHistory.length > 0) {
+        // 转换为兼容的HistoryRecord格式
+        const convertedHistory = imageHistory.map(record => ({
+          id: record.id,
+          timestamp: record.timestamp,
+          operation: "replace",
+          files: [record.original_path],
+          image_count: 1,
+          success: record.success,
+          backup_path: undefined,
+          duration: undefined,
+          total_size: record.file_size,
+          error_message: record.error_message,
+          metadata: {
+            uploaded_url: record.uploaded_url || "",
+            source_file: record.source_file || "",
+            upload_mode: record.upload_mode
+          }
+        }))
+        setRecentHistory(convertedHistory)
+        console.log('[ArticleUpload] History set from image records:', convertedHistory.length)
+      } else {
+        console.log('[ArticleUpload] No image history found, trying fallback to unified history')
+        // 如果没有图片历史记录，从统一历史记录中筛选
+        await loadHistoryFromUnified()
+      }
+    } catch (error) {
+      console.warn('[ArticleUpload] Failed to load image history, trying unified history:', error)
+      // 如果图片历史加载失败，尝试从统一历史记录加载
+      await loadHistoryFromUnified()
+    }
+  }
+
+  // 从统一历史记录中加载文章上传模式的记录
+  const loadHistoryFromUnified = async () => {
+    try {
+      console.log('[ArticleUpload] Loading history from unified records...')
+      const allHistory = await tauriAPI.getUploadHistory(1, 20) // 获取前20条
+      console.log('[ArticleUpload] Unified history loaded:', allHistory.items.length, 'total records')
+      
+      // 从统一历史记录中筛选文章上传模式的记录
+      const filteredHistory = allHistory.items.filter(record => {
+        const isArticleUpload = record.metadata?.upload_mode === UploadMode.ArticleUpload ||
+                                record.operation === 'replace' // 兼容旧的记录
+        console.log('[ArticleUpload] Checking record:', record.id, 'operation:', record.operation, 'upload_mode:', record.metadata?.upload_mode, 'isArticleUpload:', isArticleUpload)
+        return isArticleUpload
+      })
+      
+      console.log('[ArticleUpload] Filtered history:', filteredHistory.length, 'article upload records')
+      setRecentHistory(filteredHistory.slice(0, 3)) // 只显示前3条
+    } catch (error) {
+      console.error('[ArticleUpload] Failed to load unified history:', error)
+      setRecentHistory([]) // 设置为空数组避免显示错误
+    }
+  }
+
+  // 统一的历史记录刷新函数
+  const refreshHistory = async () => {
+    try {
+      console.log('[ArticleUpload] Refreshing history...')
+      // 首先尝试从图片历史记录加载
+      const imageHistory = await tauriAPI.getImageHistory(UploadMode.ArticleUpload, 3)
+      
+      if (imageHistory.length > 0) {
+        const convertedHistory = imageHistory.map(record => ({
+          id: record.id,
+          timestamp: record.timestamp,
+          operation: "replace",
+          files: [record.original_path],
+          image_count: 1,
+          success: record.success,
+          backup_path: undefined,
+          duration: undefined,
+          total_size: record.file_size,
+          error_message: record.error_message,
+          metadata: {
+            uploaded_url: record.uploaded_url || "",
+            source_file: record.source_file || "",
+            upload_mode: record.upload_mode
+          }
+        }))
+        setRecentHistory(convertedHistory)
+        console.log('[ArticleUpload] History refreshed from image records:', convertedHistory.length)
+      } else {
+        // 如果没有图片历史记录，尝试从统一历史加载
+        await loadHistoryFromUnified()
+      }
+    } catch (error) {
+      console.error('[ArticleUpload] Failed to refresh history:', error)
+      // 尝试备选方案
+      await loadHistoryFromUnified()
+    }
+  }
 
   const clearError = () => setState(prev => ({ ...prev, error: null }))
   const clearSuccess = () => setState(prev => ({ ...prev, successMessage: null }))
@@ -236,10 +337,10 @@ function ArticleUpload() {
     try {
       // Step 1: Upload selected images
       const selectedImages = detectedImages.filter(img => state.selectedImages.has(img.id))
-      const selectedImagePaths = selectedImages.map(img => img.absolute_path)
+      const imageData: [string, string][] = selectedImages.map(img => [img.id, img.absolute_path])
       setState(prev => ({ ...prev, processingProgress: 25 }))
 
-      const uploadResults = await tauriAPI.uploadImages(selectedImagePaths, ossConfig)
+      const uploadResults = await tauriAPI.uploadImagesWithIds(imageData, ossConfig)
       setState(prev => ({ ...prev, processingProgress: 50 }))
 
       // Step 2: Create link replacements
@@ -278,17 +379,44 @@ function ArticleUpload() {
 
       setShowImageModal(false)
 
-      // Add to history
-      await tauriAPI.addHistoryRecord(
-        "replace",
-        state.selectedFiles,
-        state.selectedImages.size,
-        true,
-        undefined,
-        undefined,
-        undefined,
-        undefined
-      )
+      // 为每张成功处理的图片添加历史记录
+      try {
+        const imageHistoryRecords = []
+        
+        for (const replacement of replacements) {
+          // 找到对应的图片信息
+          const imageInfo = detectedImages.find(img => 
+            img.original_path === replacement.old_link && 
+            state.selectedImages.has(img.id)
+          )
+          
+          if (imageInfo) {
+            imageHistoryRecords.push({
+              id: "", // 后端会生成
+              timestamp: new Date().toISOString(),
+              image_name: imageInfo.original_path.split(/[\\/]/).pop() || imageInfo.original_path,
+              original_path: imageInfo.absolute_path,
+              uploaded_url: replacement.new_link,
+              upload_mode: UploadMode.ArticleUpload,
+              source_file: replacement.file_path, // 来源Markdown文件
+              success: true,
+              file_size: imageInfo.size || 0,
+              error_message: undefined,
+              checksum: undefined
+            })
+          }
+        }
+
+        // 批量添加历史记录
+        if (imageHistoryRecords.length > 0) {
+          await tauriAPI.addBatchImageHistoryRecords(imageHistoryRecords)
+        }
+
+        // 刷新历史记录显示
+        await refreshHistory()
+      } catch (error) {
+        console.warn("Failed to save image history records:", error)
+      }
 
     } catch (error) {
       setState(prev => ({
@@ -521,7 +649,7 @@ function ArticleUpload() {
       <Card>
         <CardHeader>
           <CardTitle>最近上传记录</CardTitle>
-          <CardDescription>显示最近上传的图片和处理状态</CardDescription>
+          <CardDescription>显示最近的图片上传记录</CardDescription>
         </CardHeader>
         <CardContent>
           <div className="space-y-3">

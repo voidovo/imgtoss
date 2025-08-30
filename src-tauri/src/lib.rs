@@ -56,6 +56,12 @@ pub fn run() {
             export_history,
             add_history_record,
             get_history_statistics,
+            // 图片历史记录命令
+            add_image_history_record,
+            add_batch_image_history_records,
+            get_image_history,
+            delete_image_history_record,
+            clear_image_history,
             delete_backup,
             cleanup_old_backups,
             cleanup_old_history,

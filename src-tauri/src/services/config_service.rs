@@ -7,11 +7,12 @@ use sha2::{Sha256, Digest};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
-use std::time::{Duration, Instant, SystemTime};
+use std::time::SystemTime;
 
 const CACHE_FILE_NAME: &str = "connection_cache.json";
 const CONFIG_DIR_NAME: &str = "imgtoss";
 const CACHE_EXPIRY_SECONDS: u64 = 300; // 5 minutes
+#[allow(dead_code)]
 const STRONGHOLD_CONFIG_KEY: &str = "oss_config";
 
 // OSS Connection Test Cache
@@ -55,6 +56,7 @@ impl ConfigService {
         })
     }
 
+    #[allow(dead_code)]
     pub fn new_with_dir(config_dir: PathBuf) -> Result<Self> {
         // Ensure config directory exists
         if !config_dir.exists() {
@@ -342,6 +344,7 @@ impl ConfigService {
         })
     }
 
+    #[allow(dead_code)]
     pub async fn delete_config(&self) -> Result<()> {
         // For now, we'll delete the config JSON file
         // The Stronghold integration will be handled on the frontend

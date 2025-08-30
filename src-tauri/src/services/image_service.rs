@@ -1,9 +1,8 @@
 use crate::models::ImageInfo;
 use crate::utils::{AppError, Result};
-use crate::{log_debug, log_info, log_error, log_timing, log_operation};
+use crate::{log_debug, log_info, log_error, log_timing};
 use image::{
-    imageops::FilterType, DynamicImage, GenericImageView, ImageBuffer, ImageFormat, ImageReader,
-    Rgb,
+    imageops::FilterType, GenericImageView, ImageFormat, ImageReader,
 };
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -196,6 +195,7 @@ impl ImageService {
     ///
     /// # Returns
     /// * `Result<Vec<u8>>` - Compressed JPEG image data
+    #[allow(dead_code)]
     pub async fn compress_image(&self, image_path: &str, quality: u8) -> Result<Vec<u8>> {
         let image_path = image_path.to_string();
 
@@ -277,6 +277,7 @@ impl ImageService {
     ///
     /// # Returns
     /// * `Result<Vec<u8>>` - Converted image data
+    #[allow(dead_code)]
     pub async fn convert_format(&self, image_data: &[u8], target_format: &str) -> Result<Vec<u8>> {
         let image_data = image_data.to_vec();
         let target_format = target_format.to_lowercase();
@@ -432,6 +433,7 @@ impl ImageService {
     ///
     /// # Returns
     /// * `Result<bool>` - True if the file is a supported image format
+    #[allow(dead_code)]
     pub async fn is_supported_image(&self, image_path: &str) -> Result<bool> {
         let image_path = image_path.to_string();
 
@@ -469,6 +471,7 @@ impl ImageService {
     ///
     /// # Returns
     /// * `Result<u8>` - Recommended quality setting (1-100)
+    #[allow(dead_code)]
     pub async fn get_optimal_quality(
         &self,
         image_path: &str,
@@ -539,6 +542,7 @@ impl ImageService {
     ///
     /// # Returns
     /// * `Result<String>` - Hexadecimal SHA256 checksum
+    #[allow(dead_code)]
     pub async fn calculate_checksum_from_data(&self, image_data: &[u8]) -> Result<String> {
         let data = image_data.to_vec();
 

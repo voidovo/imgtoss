@@ -13,7 +13,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert"
 import { convertFileSrc } from '@tauri-apps/api/core'
 import { tauriAPI, historyOperations, configOperations } from "@/lib/tauri-api"
 import type { OSSConfig, UploadResult, UploadProgress, HistoryRecord } from "@/lib/types"
-import { OSSProvider } from "@/lib/types"
+import { OSSProvider, UploadMode } from "@/lib/types"
 import { NotificationType } from "@/lib/types"
 import { useProgressMonitoring } from "@/lib/hooks/use-progress-monitoring"
 import { NotificationSystem, ProgressNotificationCompact } from "@/components/ui/notification-system"
@@ -112,30 +112,61 @@ function ImageUpload() {
 
   // 延迟加载历史记录，避免阻塞初始渲染
   useEffect(() => {
-    if (!appState.isInitialized) return
+    if (!appState.isInitialized) {
+      console.log('[ImageUpload] App not initialized yet, waiting...')
+      return
+    }
 
     // 延迟加载以提高页面响应性
     const loadDataWithDelay = async () => {
       // 延迟执行非关键初始化
       setTimeout(async () => {
         try {
-          // 并行加载历史记录和初始化监控
+          console.log('[ImageUpload] Starting history loading...')
+          
+          // 首先尝试从图片历史记录加载
           const [historyResult] = await Promise.allSettled([
-            historyOperations.searchHistory(
-              undefined, "upload", true, undefined, undefined, 1, 5
-            )
+            tauriAPI.getImageHistory(UploadMode.ImageUpload, 5)
           ])
 
           if (historyResult.status === 'fulfilled') {
-            setRecentHistory(historyResult.value.items || [])
+            console.log('[ImageUpload] Image history loaded:', historyResult.value.length, 'records')
+            
+            if (historyResult.value.length > 0) {
+              // 转换ImageHistoryRecord为HistoryRecord格式以兼容显示组件
+              const convertedHistory = historyResult.value.map(record => ({
+                id: record.id,
+                timestamp: record.timestamp,
+                operation: "upload",
+                files: [record.original_path],
+                image_count: 1,
+                success: record.success,
+                backup_path: undefined,
+                duration: undefined,
+                total_size: record.file_size,
+                error_message: record.error_message,
+                metadata: {
+                  uploaded_url: record.uploaded_url || "",
+                  upload_mode: record.upload_mode
+                }
+              }))
+              setRecentHistory(convertedHistory)
+              console.log('[ImageUpload] History set from image records:', convertedHistory.length)
+            } else {
+              console.log('[ImageUpload] No image history found, trying fallback to unified history')
+              // 如果没有图片历史记录，从统一历史记录中筛选
+              await loadHistoryFromUnified()
+            }
           } else {
-            console.warn("Failed to load recent history:", historyResult.reason)
+            console.warn('[ImageUpload] Failed to load image history:', historyResult.reason)
+            // 尝试从统一历史记录加载
+            await loadHistoryFromUnified()
           }
 
           // 启动进度监控（单例模式，不会重复创建）
           await startMonitoring()
         } catch (error) {
-          console.warn("Non-critical initialization failed:", error)
+          console.error('[ImageUpload] Critical initialization failed:', error)
         }
       }, 300) // 延迟 300ms，让页面先完成关键渲染
     }
@@ -147,6 +178,66 @@ function ImageUpload() {
       stopMonitoring()
     }
   }, [appState.isInitialized, startMonitoring, stopMonitoring])
+
+  // 从统一历史记录中加载图片上传模式的记录
+  const loadHistoryFromUnified = async () => {
+    try {
+      console.log('[ImageUpload] Loading history from unified records...')
+      const allHistory = await tauriAPI.getUploadHistory(1, 20) // 获取前20条
+      console.log('[ImageUpload] Unified history loaded:', allHistory.items.length, 'total records')
+      
+      // 从统一历史记录中筛选图片上传模式的记录
+      const filteredHistory = allHistory.items.filter(record => {
+        const isImageUpload = record.metadata?.upload_mode === UploadMode.ImageUpload ||
+                              record.operation === 'upload' // 兼容旧的记录
+        console.log('[ImageUpload] Checking record:', record.id, 'operation:', record.operation, 'upload_mode:', record.metadata?.upload_mode, 'isImageUpload:', isImageUpload)
+        return isImageUpload
+      })
+      
+      console.log('[ImageUpload] Filtered history:', filteredHistory.length, 'image upload records')
+      setRecentHistory(filteredHistory.slice(0, 5)) // 只显示前5条
+    } catch (error) {
+      console.error('[ImageUpload] Failed to load unified history:', error)
+      setRecentHistory([]) // 设置为空数组避免显示错误
+    }
+  }
+
+  // 统一的历史记录刷新函数
+  const refreshHistory = async () => {
+    try {
+      console.log('[ImageUpload] Refreshing history...')
+      // 首先尝试从图片历史记录加载
+      const imageHistory = await tauriAPI.getImageHistory(UploadMode.ImageUpload, 5)
+      
+      if (imageHistory.length > 0) {
+        const convertedHistory = imageHistory.map(record => ({
+          id: record.id,
+          timestamp: record.timestamp,
+          operation: "upload",
+          files: [record.original_path],
+          image_count: 1,
+          success: record.success,
+          backup_path: undefined,
+          duration: undefined,
+          total_size: record.file_size,
+          error_message: record.error_message,
+          metadata: {
+            uploaded_url: record.uploaded_url || "",
+            upload_mode: record.upload_mode
+          }
+        }))
+        setRecentHistory(convertedHistory)
+        console.log('[ImageUpload] History refreshed from image records:', convertedHistory.length)
+      } else {
+        // 如果没有图片历史记录，尝试从统一历史加载
+        await loadHistoryFromUnified()
+      }
+    } catch (error) {
+      console.error('[ImageUpload] Failed to refresh history:', error)
+      // 尝试备选方案
+      await loadHistoryFromUnified()
+    }
+  }
 
   // Update file progress from the monitoring hook
   useEffect(() => {
@@ -427,6 +518,33 @@ function ImageUpload() {
           return file
         })
       )
+
+      // 为每个成功上传的图片添加历史记录
+      try {
+        for (const result of results) {
+          if (result.success && result.uploaded_url) {
+            const uploadFile = filesToUpload.find(f => f.id === result.image_id)
+            if (uploadFile) {
+              await tauriAPI.addImageHistoryRecord(
+                uploadFile.fileName,
+                uploadFile.filePath,
+                result.uploaded_url,
+                UploadMode.ImageUpload, // 图片上传模式
+                undefined, // 没有来源文件
+                true,
+                uploadFile.fileSize || 0,
+                undefined,
+                undefined // 可以考虑添加文件校验和
+              )
+            }
+          }
+        }
+
+        // 刷新历史记录显示
+        await refreshHistory()
+      } catch (error) {
+        console.warn("Failed to save image history records:", error)
+      }
 
     } catch (error) {
       console.error("Upload failed:", error)
@@ -814,7 +932,7 @@ function ImageUpload() {
       {/* Recent Upload History */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-lg">最近上传记录</CardTitle>
+          <CardTitle>最近上传记录</CardTitle>
           <p className="text-sm text-muted-foreground">显示最近的图片上传记录</p>
         </CardHeader>
         <CardContent>
