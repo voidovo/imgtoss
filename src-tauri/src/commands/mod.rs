@@ -4,6 +4,7 @@ use crate::models::{
     ObjectInfo, PaginatedResult, ProgressNotification, ReplacementResult, RollbackResult,
     ScanResult, SystemHealth, UploadProgress, UploadResult, UploadTaskInfo, UploadTaskManager,
     UploadTaskStatus, ValidationResult, SaveOptions, ImageHistoryRecord, UploadMode,
+    ConfigItem, ConfigCollection,
 };
 use crate::services::history_service::{
     FileOperation, HistoryQuery, HistoryStatistics, OperationType,
@@ -236,6 +237,37 @@ pub fn validate_pagination(
     }
 
     Ok((page, page_size))
+}
+
+/// Validates UUID format
+pub fn validate_uuid(uuid: &str) -> Result<(), AppError> {
+    if uuid.is_empty() {
+        return Err(AppError::Validation("UUID cannot be empty".to_string()));
+    }
+
+    // Basic UUID format validation (8-4-4-4-12)
+    if uuid.len() != 36 {
+        return Err(AppError::Validation("Invalid UUID format".to_string()));
+    }
+
+    let parts: Vec<&str> = uuid.split('-').collect();
+    if parts.len() != 5 {
+        return Err(AppError::Validation("Invalid UUID format".to_string()));
+    }
+
+    if parts[0].len() != 8 || parts[1].len() != 4 || parts[2].len() != 4 
+        || parts[3].len() != 4 || parts[4].len() != 12 {
+        return Err(AppError::Validation("Invalid UUID format".to_string()));
+    }
+
+    // Check if all characters are hexadecimal
+    for part in parts {
+        if !part.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Err(AppError::Validation("Invalid UUID format".to_string()));
+        }
+    }
+
+    Ok(())
 }
 
 // ============================================================================
@@ -1476,6 +1508,74 @@ pub async fn import_oss_config(config_json: String) -> Result<(), String> {
     
     config_service
         .save_config(&config)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+// ============================================================================
+// Multi-Config Management Commands
+// ============================================================================
+
+#[tauri::command]
+pub async fn get_all_configs() -> Result<ConfigCollection, String> {
+    let config_service = ConfigService::new().map_err(|e| e.to_string())?;
+    config_service
+        .load_all_configs()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn save_config_item(item: ConfigItem) -> Result<(), String> {
+    // Rate limiting
+    CONFIG_RATE_LIMITER
+        .check_rate_limit("save_config_item")
+        .map_err(|e| e.to_string())?;
+
+    // Validate the config within the item
+    validate_oss_config_params(&item.config).map_err(|e| e.to_string())?;
+
+    let config_service = ConfigService::new().map_err(|e| e.to_string())?;
+    config_service
+        .save_config_item(item)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn set_active_config(config_id: String) -> Result<(), String> {
+    // Validate UUID format
+    validate_uuid(&config_id).map_err(|e| e.to_string())?;
+
+    let config_service = ConfigService::new().map_err(|e| e.to_string())?;
+    config_service
+        .set_active_config(config_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn delete_config_item(config_id: String) -> Result<(), String> {
+    // Rate limiting
+    CONFIG_RATE_LIMITER
+        .check_rate_limit("delete_config")
+        .map_err(|e| e.to_string())?;
+
+    // Validate UUID format
+    validate_uuid(&config_id).map_err(|e| e.to_string())?;
+
+    let config_service = ConfigService::new().map_err(|e| e.to_string())?;
+    config_service
+        .delete_config_item(config_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_active_config() -> Result<Option<ConfigItem>, String> {
+    let config_service = ConfigService::new().map_err(|e| e.to_string())?;
+    config_service
+        .get_active_config()
         .await
         .map_err(|e| e.to_string())
 }

@@ -677,24 +677,7 @@ function ImageUpload() {
         </div>
       </div>
 
-      {/* OSS Configuration Status */}
-      {!config && (
-        <Alert>
-          <Settings className="h-4 w-4" />
-          <AlertDescription className="flex items-center justify-between">
-            <span>未找到 OSS 配置。请先配置您的对象存储设置。</span>
-            <Button 
-              size="sm" 
-              variant="outline"
-              onClick={() => window.location.href = '/storage'}
-            >
-              配置存储
-            </Button>
-          </AlertDescription>
-        </Alert>
-      )}
-
-      {/* Upload Configuration */}
+      {/* Upload Configuration and Area */}
       <Card>
         <CardHeader>
           <CardTitle className="text-lg">上传配置</CardTitle>
@@ -720,19 +703,7 @@ function ImageUpload() {
             </div>
           )}
 
-          {!config && (
-            <div className="p-3 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg">
-              <p className="text-sm text-yellow-800 dark:text-yellow-200">
-                请先在存储配置页面配置您的对象存储服务
-              </p>
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      {/* Upload Area */}
-      <Card>
-        <CardContent className="p-6">
+          {/* Upload Area */}
           <div
             className={`border-2 border-dashed rounded-lg p-8 text-center transition-colors ${isDragging
               ? "border-blue-500 bg-blue-50 dark:bg-blue-900/20"
@@ -757,6 +728,23 @@ function ImageUpload() {
               className="hidden"
             />
           </div>
+
+          {/* OSS Configuration Status */}
+          {!config && (
+            <Alert>
+              <Settings className="h-4 w-4" />
+              <AlertDescription className="flex items-center justify-between">
+                <span>未找到 OSS 配置。请先配置您的对象存储设置。</span>
+                <Button 
+                  size="sm" 
+                  variant="outline"
+                  onClick={() => window.location.href = '/storage'}
+                >
+                  配置存储
+                </Button>
+              </AlertDescription>
+            </Alert>
+          )}
         </CardContent>
       </Card>
 

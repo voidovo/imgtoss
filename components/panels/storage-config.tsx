@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react"
 import { Button } from "@/components/ui/button"
+import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -9,10 +10,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch"
 import { Sheet, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { AlertCircle, AlertTriangle, CheckCircle, Cloud, Database, Globe, Key, Plus, Settings, Trash2, TestTube, Download, Upload, Loader2 } from "lucide-react"
+import { AlertCircle, CheckCircle, Cloud, Database, Globe, Plus, Trash2, Download, Upload, Loader2 } from "lucide-react"
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import { configOperations } from "@/lib/tauri-api"
-import { OSSConfig, OSSProvider, OSSConnectionTest, ConfigValidation } from "@/lib/types"
+import { configOperations, uploadOperations } from "@/lib/tauri-api"
+import { OSSConfig, OSSProvider, OSSConnectionTest, ConfigValidation, ConfigItem, ConfigCollection } from "@/lib/types"
 import type { SaveOptions } from "@/lib/types"
 import { parseTauriError } from "@/lib/error-handler"
 import { useAppState } from "@/lib/contexts/app-state-context"
@@ -31,14 +32,16 @@ function getCoreConfigHash(config: OSSConfig): string {
 }
 
 interface StorageConfigState {
-  config: OSSConfig | null
+  configs: ConfigItem[]  // 所有配置列表
+  activeConfigId: string | null  // 当前活动配置ID
+  config: OSSConfig | null  // 兼容旧代码：当前活动配置的 OSSConfig
   isLoading: boolean
   isTesting: boolean
   isValidating: boolean
   lastConnectionTest: OSSConnectionTest | null
   validationResult: ConfigValidation | null
   error: string | null
-  lastTestedConfigHash: string | null // New: track last tested configuration
+  lastTestedConfigHash: string | null
 }
 
 const providerTemplates = {
@@ -71,6 +74,8 @@ const providerTemplates = {
 export function StorageConfig() {
   const { state: appState } = useAppState()
   const [state, setState] = useState<StorageConfigState>({
+    configs: [],
+    activeConfigId: null,
     config: null,
     isLoading: true,
     isTesting: false,
@@ -83,6 +88,8 @@ export function StorageConfig() {
 
   const [isSheetOpen, setIsSheetOpen] = useState(false)
   const [sheetMode, setSheetMode] = useState<'add' | 'edit'>('add')
+  const [editingConfigId, setEditingConfigId] = useState<string | null>(null)
+  const [configName, setConfigName] = useState('')
   const [editConfig, setEditConfig] = useState<OSSConfig>({
     provider: OSSProvider.Aliyun,
     endpoint: "",
@@ -111,21 +118,28 @@ export function StorageConfig() {
   const loadConfiguration = async () => {
     try {
       setState(prev => ({ ...prev, isLoading: true, error: null }))
-      const config = await configOperations.loadOSSConfig()
+      
+      // 加载所有配置
+      const collection = await configOperations.getAllConfigs()
+      const activeConfig = collection.configs.find(c => c.is_active)
+      
       setState(prev => ({
         ...prev,
-        config,
+        configs: collection.configs,
+        activeConfigId: collection.active_config_id,
+        config: activeConfig?.config || null,
         isLoading: false,
       }))
-      if (config) {
-        setEditConfig(config)
+      
+      if (activeConfig) {
+        setEditConfig(activeConfig.config)
 
         // 设置基准配置哈希（即使没有缓存的连接状态）
-        const originalConfigHash = getCoreConfigHash(config)
+        const originalConfigHash = getCoreConfigHash(activeConfig.config)
 
         // Try to load cached connection status
         try {
-          const cachedStatus = await configOperations.getCachedConnectionStatus(config)
+          const cachedStatus = await configOperations.getCachedConnectionStatus(activeConfig.config)
           if (cachedStatus) {
             setState(prev => ({
               ...prev,
@@ -212,6 +226,16 @@ export function StorageConfig() {
     try {
       setState(prev => ({ ...prev, isValidating: true, error: null }))
 
+      // 验证配置名称
+      if (!configName.trim()) {
+        setState(prev => ({
+          ...prev,
+          error: '请输入配置名称',
+          isValidating: false
+        }))
+        return
+      }
+
       // Prepare save options for force revalidation if config changed
       const saveOptions: SaveOptions | undefined = hasConfigChanged ?
         { force_revalidate: true } : undefined
@@ -229,11 +253,25 @@ export function StorageConfig() {
         return
       }
 
-      // Save configuration with force revalidation if needed
-      await configOperations.saveOSSConfig(editConfig, saveOptions)
+      // 创建或更新配置项
+      const configItem: ConfigItem = {
+        id: editingConfigId || await uploadOperations.generateUuid(),
+        name: configName,
+        config: editConfig,
+        is_active: sheetMode === 'add' || state.configs.length === 0,
+        created_at: sheetMode === 'add' ? new Date().toISOString() : 
+          state.configs.find(c => c.id === editingConfigId)?.created_at || new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      }
+
+      // 保存配置项
+      await configOperations.saveConfigItem(configItem)
+      
+      // 重新加载配置列表
+      await loadConfiguration()
+      
       setState(prev => ({
         ...prev,
-        config: editConfig,
         isValidating: false,
         lastConnectionTest: validation.connection_test || null,
         lastTestedConfigHash: currentConfigHash // Update the hash after successful save
@@ -313,17 +351,17 @@ export function StorageConfig() {
     event.target.value = ''
   }
 
-  const handleStartEdit = () => {
-    if (state.config) {
-      setEditConfig(state.config)
-      const originalConfigHash = getCoreConfigHash(state.config)
-      setState(prev => ({
-        ...prev,
-        lastTestedConfigHash: originalConfigHash,
-        lastConnectionTest: null,
-        error: null
-      }))
-    }
+  const handleStartEdit = (configItem: ConfigItem) => {
+    setEditConfig(configItem.config)
+    setConfigName(configItem.name)
+    setEditingConfigId(configItem.id)
+    const originalConfigHash = getCoreConfigHash(configItem.config)
+    setState(prev => ({
+      ...prev,
+      lastTestedConfigHash: originalConfigHash,
+      lastConnectionTest: null,
+      error: null
+    }))
     setSheetMode('edit')
     setIsSheetOpen(true)
   }
@@ -342,6 +380,8 @@ export function StorageConfig() {
       compression_quality: 80,
     }
     setEditConfig(defaultConfig)
+    setConfigName('')
+    setEditingConfigId(null)
     const defaultConfigHash = getCoreConfigHash(defaultConfig)
     setState(prev => ({
       ...prev,
@@ -363,22 +403,34 @@ export function StorageConfig() {
     }))
   }
 
-  const getStatusColor = (success?: boolean, configChanged?: boolean) => {
-    if (configChanged) return "text-amber-600"
-    if (success === undefined) return "text-gray-500"
-    return success ? "text-green-600" : "text-red-600"
+  const handleDeleteConfig = async (configId: string) => {
+    if (!confirm('确定要删除这个配置吗？')) {
+      return
+    }
+    
+    try {
+      await configOperations.deleteConfigItem(configId)
+      await loadConfiguration()
+    } catch (error) {
+      const errorMessage = parseTauriError(error).message
+      setState(prev => ({
+        ...prev,
+        error: errorMessage,
+      }))
+    }
   }
 
-  const getStatusIcon = (success?: boolean, configChanged?: boolean) => {
-    if (configChanged) return AlertTriangle
-    if (success === undefined) return TestTube
-    return success ? CheckCircle : AlertCircle
-  }
-
-  const getStatusText = (success?: boolean, configChanged?: boolean) => {
-    if (configChanged) return "配置已变更，需重新测试"
-    if (success === undefined) return "启动时将自动测试连通性"
-    return success ? "连接成功" : "连接失败"
+  const handleSetActiveConfig = async (configId: string) => {
+    try {
+      await configOperations.setActiveConfig(configId)
+      await loadConfiguration()
+    } catch (error) {
+      const errorMessage = parseTauriError(error).message
+      setState(prev => ({
+        ...prev,
+        error: errorMessage,
+      }))
+    }
   }
 
   const getSaveButtonText = (configChanged?: boolean, isValidating?: boolean) => {
@@ -390,34 +442,6 @@ export function StorageConfig() {
   const getTestButtonStyle = (configChanged?: boolean) => {
     if (configChanged) return "border-blue-500 bg-blue-50 text-blue-700 hover:bg-blue-100"
     return ""
-  }
-
-  // Helper to get connection status for display  
-  const getDisplayConnectionStatus = () => {
-    // 这个函数主要用于主页面的配置卡片显示，不应该受到 sheet 内部状态影响
-    // 只使用应用级别的连接测试状态
-    const connectionTest = appState.lastConnectionTest
-
-    // Debug logging
-    console.log('StorageConfig - Connection status debug:', {
-      appStateTest: appState.lastConnectionTest,
-      localStateTest: state.lastConnectionTest,
-      selectedTest: connectionTest,
-      success: connectionTest?.success,
-      hasConfigChanged,
-    })
-
-    if (connectionTest) {
-      return {
-        success: connectionTest.success,
-        hasConfigChanged: hasConfigChanged
-      }
-    }
-
-    return {
-      success: undefined,
-      hasConfigChanged: false
-    }
   }
 
   // 渲染配置表单内容（可滚动部分）
@@ -432,6 +456,20 @@ export function StorageConfig() {
       )}
 
       <div className="space-y-4">
+        {/* 配置名称 */}
+        <div className="space-y-2">
+          <Label htmlFor="config-name">配置名称 *</Label>
+          <Input
+            id="config-name"
+            placeholder="例如：个人存储、公司存储"
+            value={configName}
+            onChange={(e) => setConfigName(e.target.value)}
+          />
+          <p className="text-xs text-muted-foreground">
+            给这个配置起一个容易识别的名称
+          </p>
+        </div>
+
         <div className="grid grid-cols-2 gap-4">
           <div className="space-y-2">
             <Label htmlFor="provider-type">存储类型</Label>
@@ -779,68 +817,76 @@ export function StorageConfig() {
         </Alert>
       )}
 
-      {/* Current Configuration Display */}
-      {state.config && (
+      {/* Configuration List */}
+      {state.configs.length > 0 && (
         <Card>
-          <CardHeader className="pb-3">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                {(() => {
-                  const template = providerTemplates[state.config.provider]
-                  const displayStatus = getDisplayConnectionStatus()
-                  const StatusIcon = getStatusIcon(displayStatus.success, displayStatus.hasConfigChanged)
-                  return (
-                    <>
+          <CardHeader>
+            <CardTitle>配置列表</CardTitle>
+            <CardDescription>管理您的所有存储配置</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-3">
+              {state.configs.map((configItem) => {
+                const template = providerTemplates[configItem.config.provider]
+                return (
+                  <div
+                    key={configItem.id}
+                    className={`flex items-center justify-between p-4 rounded-lg border ${
+                      configItem.is_active ? 'border-primary bg-primary/5' : 'border-border'
+                    }`}
+                  >
+                    <div className="flex items-center gap-3">
                       <template.icon className="h-5 w-5 text-muted-foreground" />
                       <div>
-                        <CardTitle className="text-lg">当前存储配置</CardTitle>
-                        <CardDescription>{template.name}</CardDescription>
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium">{configItem.name}</span>
+                          {configItem.is_active && (
+                            <Badge className="bg-green-500 text-white hover:bg-green-600 border-transparent">
+                              当前使用
+                            </Badge>
+                          )}
+                        </div>
+                        <div className="text-sm text-muted-foreground">
+                          {template.name} - {configItem.config.bucket}
+                        </div>
                       </div>
-                    </>
-                  )
-                })()}
-              </div>
-              <div className="flex items-center gap-2">
-                <div className={`flex items-center gap-1 ${getStatusColor(getDisplayConnectionStatus().success, getDisplayConnectionStatus().hasConfigChanged)}`}>
-                  {(() => {
-                    const displayStatus = getDisplayConnectionStatus()
-                    const StatusIcon = getStatusIcon(displayStatus.success, displayStatus.hasConfigChanged)
-                    return <StatusIcon className="h-4 w-4" />
-                  })()}
-                  <span className="text-sm">
-                    {getStatusText(getDisplayConnectionStatus().success, getDisplayConnectionStatus().hasConfigChanged)}
-                  </span>
-                </div>
-              </div>
-            </div>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-4 text-sm text-center">
-              <div>
-                <Label className="text-xs text-muted-foreground">存储桶</Label>
-                <p className="font-mono">{state.config.bucket}</p>
-              </div>
-              <div>
-                <Label className="text-xs text-muted-foreground">区域</Label>
-                <p>{state.config.region}</p>
-              </div>
-              <div>
-                <Label className="text-xs text-muted-foreground">路径模板</Label>
-                <p className="font-mono">{state.config.path_template}</p>
-              </div>
-            </div>
-
-            <div className="flex items-center justify-end pt-2">
-              <Button variant="outline" size="sm" onClick={handleStartEdit}>
-                编辑配置
-              </Button>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {!configItem.is_active && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => handleSetActiveConfig(configItem.id)}
+                        >
+                          设为活动
+                        </Button>
+                      )}
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => handleStartEdit(configItem)}
+                      >
+                        编辑
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => handleDeleteConfig(configItem.id)}
+                        disabled={configItem.is_active && state.configs.length === 1}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </div>
+                )
+              })}
             </div>
           </CardContent>
         </Card>
       )}
 
       {/* No Configuration Message */}
-      {!state.config && (
+      {state.configs.length === 0 && (
         <Card>
           <CardContent className="flex flex-col items-center justify-center py-12">
             <Cloud className="h-12 w-12 text-muted-foreground mb-4" />

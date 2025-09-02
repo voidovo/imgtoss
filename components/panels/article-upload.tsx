@@ -14,7 +14,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Checkbox } from "@/components/ui/checkbox"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Progress } from "@/components/ui/progress"
@@ -23,7 +22,6 @@ import { tauriAPI } from "@/lib/tauri-api"
 import { configOperations, historyOperations } from "@/lib/tauri-api"
 import { FilenameDisplay } from "@/components/ui/filename-display"
 import { formatFileSizeHuman } from "@/lib/utils/format"
-import { getArticleUploadProvider, setArticleUploadProvider } from "@/lib/utils/user-preferences"
 import type { ScanResult, ImageReference, LinkReplacement, OSSConfig, HistoryRecord } from "@/lib/types"
 import { OSSProvider, UploadMode } from "@/lib/types"
 import { copyToClipboardWithToast } from "@/lib/utils/copy-to-clipboard"
@@ -63,8 +61,6 @@ function ArticleUpload() {
     duplicateResults: new Map(),
   })
 
-  const [selectedProvider, setSelectedProvider] = useState<OSSProvider>(OSSProvider.Aliyun)
-  const [availableProviders, setAvailableProviders] = useState<OSSProvider[]>([])
   const [recentHistory, setRecentHistory] = useState<HistoryRecord[]>([])
 
   // 使用全局应用状态获取配置
@@ -84,24 +80,6 @@ function ArticleUpload() {
         try {
           console.log('[ArticleUpload] Starting initialization...')
           
-          // 设置可用的供应商列表（目前只有当前配置的供应商）
-          if (ossConfig) {
-            setAvailableProviders([ossConfig.provider])
-            
-            // 异步加载用户偏好设置
-            try {
-              const preferredProvider = getArticleUploadProvider()
-              if (preferredProvider && preferredProvider === ossConfig.provider) {
-                setSelectedProvider(preferredProvider)
-              } else {
-                setSelectedProvider(ossConfig.provider)
-              }
-            } catch (error) {
-              console.warn("[ArticleUpload] Failed to load article upload provider preference:", error)
-              setSelectedProvider(ossConfig.provider)
-            }
-          }
-
           // 并行加载历史记录
           console.log('[ArticleUpload] Loading history records...')
           await loadHistoryWithFallback()
@@ -221,11 +199,6 @@ function ArticleUpload() {
 
   const copyToClipboard = async (text: string) => {
     await copyToClipboardWithToast(text)
-  }
-
-  const handleProviderChange = (provider: OSSProvider) => {
-    setSelectedProvider(provider)
-    setArticleUploadProvider(provider)
   }
 
   // Get all detected images from scan results
@@ -549,26 +522,6 @@ function ArticleUpload() {
           <h1 className="text-2xl font-bold text-gray-900 dark:text-white">文章上传</h1>
           <p className="text-gray-600 dark:text-gray-400">批量处理 Markdown 文件中的图片链接</p>
         </div>
-        <div className="flex items-center gap-3">
-          {ossConfig && availableProviders.length > 0 && (
-            <Select
-              value={selectedProvider}
-              onValueChange={(value) => handleProviderChange(value as OSSProvider)}
-              disabled={!ossConfig || availableProviders.length === 0}
-            >
-              <SelectTrigger className="w-40">
-                <SelectValue placeholder="选择供应商" />
-              </SelectTrigger>
-              <SelectContent>
-                {availableProviders.map((provider) => (
-                  <SelectItem key={provider} value={provider}>
-                    {providerDisplayNames[provider]}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          )}
-        </div>
       </div>
 
       <div className="grid grid-cols-1 gap-6">
@@ -583,7 +536,7 @@ function ArticleUpload() {
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
                     <div>
                       <span className="font-medium text-gray-600 dark:text-gray-400">当前供应商:</span>
-                      <div className="mt-1">{providerDisplayNames[selectedProvider]}</div>
+                      <div className="mt-1">{providerDisplayNames[ossConfig.provider]}</div>
                     </div>
                     <div>
                       <span className="font-medium text-gray-600 dark:text-gray-400">存储桶:</span>

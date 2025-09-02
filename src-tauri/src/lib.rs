@@ -41,6 +41,12 @@ pub fn run() {
             list_oss_objects,
             export_oss_config,
             import_oss_config,
+            // Multi-Config Management Commands
+            get_all_configs,
+            save_config_item,
+            set_active_config,
+            delete_config_item,
+            get_active_config,
             // File Operations Commands
             replace_markdown_links,
             replace_markdown_links_with_result,
