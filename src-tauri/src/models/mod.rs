@@ -103,6 +103,24 @@ pub struct OSSConfig {
     pub compression_quality: u8,
 }
 
+// New: Configuration item for multi-config support
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConfigItem {
+    pub id: String,
+    pub name: String,
+    pub config: OSSConfig,
+    pub is_active: bool,
+    pub created_at: String,  // ISO 8601 string instead of SystemTime
+    pub updated_at: String,  // ISO 8601 string instead of SystemTime
+}
+
+// New: Collection of configurations
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConfigCollection {
+    pub configs: Vec<ConfigItem>,
+    pub active_config_id: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum OSSProvider {
     Aliyun,

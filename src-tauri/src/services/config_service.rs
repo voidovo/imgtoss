@@ -1,4 +1,4 @@
-use crate::models::{OSSConfig, ConfigValidation, OSSConnectionTest};
+use crate::models::{OSSConfig, ConfigValidation, OSSConnectionTest, ConfigItem, ConfigCollection};
 use crate::utils::{Result, AppError};
 use crate::services::oss_service::OSSService;
 use once_cell::sync::Lazy;
@@ -12,6 +12,9 @@ use std::time::SystemTime;
 const CACHE_FILE_NAME: &str = "connection_cache.json";
 const CONFIG_DIR_NAME: &str = "imgtoss";
 const CACHE_EXPIRY_SECONDS: u64 = 300; // 5 minutes
+const CONFIGS_FILE_NAME: &str = "configs.json"; // New: multi-config file
+#[allow(dead_code)]
+const LEGACY_CONFIG_FILE_NAME: &str = "config.json"; // Legacy single config file
 #[allow(dead_code)]
 const STRONGHOLD_CONFIG_KEY: &str = "oss_config";
 
@@ -92,8 +95,12 @@ impl ConfigService {
     }
 
     pub async fn load_config(&self) -> Result<Option<OSSConfig>> {
-        // For now, we'll load the config from a JSON file
-        // The Stronghold integration will be handled on the frontend
+        // Load active config from multi-config system
+        if let Some(active_config) = self.get_active_config().await? {
+            return Ok(Some(active_config.config));
+        }
+        
+        // Fallback to legacy single config file for compatibility
         let config_path = self.get_config_file_path();
         
         if !config_path.exists() {
@@ -356,6 +363,130 @@ impl ConfigService {
         Ok(())
     }
 
+    // ============================================================================
+    // Multi-Config Management Methods
+    // ============================================================================
+
+    /// Load all configurations
+    pub async fn load_all_configs(&self) -> Result<ConfigCollection> {
+        let configs_path = self.get_configs_file_path();
+        
+        if !configs_path.exists() {
+            // Return empty collection if no configs exist
+            return Ok(ConfigCollection {
+                configs: Vec::new(),
+                active_config_id: None,
+            });
+        }
+
+        let config_json = std::fs::read_to_string(&configs_path)
+            .map_err(|e| AppError::Configuration(format!("Failed to read configs: {}", e)))?;
+
+        let collection: ConfigCollection = serde_json::from_str(&config_json)
+            .map_err(|e| AppError::Configuration(format!("Failed to parse configs: {}", e)))?;
+
+        Ok(collection)
+    }
+
+    /// Save a configuration item
+    pub async fn save_config_item(&self, item: ConfigItem) -> Result<()> {
+        // Validate the config before saving
+        let validation = self.validate_config(&item.config).await?;
+        if !validation.valid {
+            return Err(AppError::Configuration(format!(
+                "Invalid configuration: {}",
+                validation.errors.join(", ")
+            )));
+        }
+
+        let mut collection = self.load_all_configs().await.unwrap_or(ConfigCollection {
+            configs: Vec::new(),
+            active_config_id: None,
+        });
+
+        // Check if config with same ID exists
+        if let Some(index) = collection.configs.iter().position(|c| c.id == item.id) {
+            // Update existing config
+            collection.configs[index] = item.clone();
+        } else {
+            // Add new config
+            collection.configs.push(item.clone());
+        }
+
+        // If this is the first config or marked as active, set it as active
+        if collection.configs.len() == 1 || item.is_active {
+            collection.active_config_id = Some(item.id.clone());
+            // Mark all other configs as inactive
+            for config in &mut collection.configs {
+                config.is_active = config.id == item.id;
+            }
+        }
+
+        self.save_config_collection(&collection).await
+    }
+
+    /// Set active configuration
+    pub async fn set_active_config(&self, config_id: String) -> Result<()> {
+        let mut collection = self.load_all_configs().await?;
+        
+        // Check if config exists
+        if !collection.configs.iter().any(|c| c.id == config_id) {
+            return Err(AppError::Configuration(format!("Config with ID {} not found", config_id)));
+        }
+
+        collection.active_config_id = Some(config_id.clone());
+        
+        // Update is_active flags
+        for config in &mut collection.configs {
+            config.is_active = config.id == config_id;
+        }
+
+        self.save_config_collection(&collection).await
+    }
+
+    /// Delete a configuration item
+    pub async fn delete_config_item(&self, config_id: String) -> Result<()> {
+        let mut collection = self.load_all_configs().await?;
+        
+        // Remove the config
+        collection.configs.retain(|c| c.id != config_id);
+        
+        // If deleted config was active, set first config as active
+        if collection.active_config_id == Some(config_id) {
+            collection.active_config_id = collection.configs.first().map(|c| c.id.clone());
+            if let Some(ref active_id) = collection.active_config_id {
+                for config in &mut collection.configs {
+                    config.is_active = config.id == *active_id;
+                }
+            }
+        }
+
+        self.save_config_collection(&collection).await
+    }
+
+    /// Get the active configuration
+    pub async fn get_active_config(&self) -> Result<Option<ConfigItem>> {
+        let collection = self.load_all_configs().await?;
+        
+        if let Some(active_id) = collection.active_config_id {
+            Ok(collection.configs.into_iter().find(|c| c.id == active_id))
+        } else {
+            Ok(collection.configs.into_iter().find(|c| c.is_active))
+        }
+    }
+
+    /// Save the entire config collection
+    async fn save_config_collection(&self, collection: &ConfigCollection) -> Result<()> {
+        let configs_path = self.get_configs_file_path();
+        let config_json = serde_json::to_string_pretty(collection)
+            .map_err(|e| AppError::Configuration(format!("Failed to serialize configs: {}", e)))?;
+
+        std::fs::write(&configs_path, config_json)
+            .map_err(|e| AppError::Configuration(format!("Failed to save configs: {}", e)))?;
+
+        Ok(())
+    }
+
     // Private helper methods
 
     fn get_config_dir() -> Result<PathBuf> {
@@ -378,6 +509,10 @@ impl ConfigService {
 
     fn get_config_file_path(&self) -> PathBuf {
         self.config_dir.join("config.json")
+    }
+
+    fn get_configs_file_path(&self) -> PathBuf {
+        self.config_dir.join(CONFIGS_FILE_NAME)
     }
 
     fn get_cache_file_path(&self) -> PathBuf {

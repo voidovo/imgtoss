@@ -8,6 +8,8 @@ import type {
   UploadResult,
   UploadProgress,
   OSSConfig,
+  ConfigItem,
+  ConfigCollection,
   OSSConnectionTest,
   ConfigValidation,
   SaveOptions,
@@ -193,6 +195,45 @@ export class TauriAPI {
    */
   async importOSSConfig(configJson: string): Promise<void> {
     return invoke<void>('import_oss_config', { configJson });
+  }
+
+  // ============================================================================
+  // Multi-Config Management
+  // ============================================================================
+
+  /**
+   * Get all saved configurations
+   */
+  async getAllConfigs(): Promise<ConfigCollection> {
+    return invoke<ConfigCollection>('get_all_configs');
+  }
+
+  /**
+   * Save a configuration item
+   */
+  async saveConfigItem(item: ConfigItem): Promise<void> {
+    return invoke<void>('save_config_item', { item });
+  }
+
+  /**
+   * Set active configuration by ID
+   */
+  async setActiveConfig(configId: string): Promise<void> {
+    return invoke<void>('set_active_config', { configId });
+  }
+
+  /**
+   * Delete a configuration item by ID
+   */
+  async deleteConfigItem(configId: string): Promise<void> {
+    return invoke<void>('delete_config_item', { configId });
+  }
+
+  /**
+   * Get the currently active configuration
+   */
+  async getActiveConfig(): Promise<ConfigItem | null> {
+    return invoke<ConfigItem | null>('get_active_config');
   }
 
   // ============================================================================
@@ -587,6 +628,12 @@ export const configOperations = {
   listOSSObjects: (config: OSSConfig, prefix?: string) => tauriAPI.listOSSObjects(config, prefix || ''),
   exportOSSConfig: () => tauriAPI.exportOSSConfig(),
   importOSSConfig: (configJson: string) => tauriAPI.importOSSConfig(configJson),
+  // Multi-config management
+  getAllConfigs: () => tauriAPI.getAllConfigs(),
+  saveConfigItem: (item: ConfigItem) => tauriAPI.saveConfigItem(item),
+  setActiveConfig: (configId: string) => tauriAPI.setActiveConfig(configId),
+  deleteConfigItem: (configId: string) => tauriAPI.deleteConfigItem(configId),
+  getActiveConfig: () => tauriAPI.getActiveConfig(),
 };
 
 export const historyOperations = {

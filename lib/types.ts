@@ -98,6 +98,21 @@ export enum OSSProvider {
   Custom = "Custom",
 }
 
+// Multi-config support types
+export interface ConfigItem {
+  id: string;
+  name: string;
+  config: OSSConfig;
+  is_active: boolean;
+  created_at: string; // SystemTime serialized as ISO string
+  updated_at: string; // SystemTime serialized as ISO string
+}
+
+export interface ConfigCollection {
+  configs: ConfigItem[];
+  active_config_id: string | null;
+}
+
 export interface OSSConnectionTest {
   success: boolean;
   error?: string;
