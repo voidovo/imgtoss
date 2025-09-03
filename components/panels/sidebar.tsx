@@ -4,7 +4,7 @@ import type React from "react"
 import { usePathname } from "next/navigation"
 
 import { FileText, ImageIcon, History, Settings, HelpCircle, Menu, Upload, Database } from "lucide-react"
-
+import Image from "next/image"
 import Link from "next/link"
 import { useState } from "react"
 
@@ -61,8 +61,14 @@ export default function Sidebar() {
         <div className="h-full flex flex-col">
           <div className="h-16 px-6 flex items-center border-b border-gray-200 dark:border-[#1F1F23]">
             <div className="flex items-center gap-3">
-              <div className="w-8 h-8 bg-gradient-to-br from-blue-500 to-purple-600 rounded-lg flex items-center justify-center">
-                <Upload className="h-4 w-4 text-white" />
+              <div className="w-8 h-8 rounded-lg overflow-hidden">
+                <Image
+                  src="/imgtoss-icon.png"
+                  alt="imgtoss"
+                  width={32}
+                  height={32}
+                  className="w-full h-full object-contain"
+                />
               </div>
               <span className="text-lg font-semibold text-gray-900 dark:text-white">imgtoss</span>
             </div>
