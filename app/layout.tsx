@@ -4,6 +4,7 @@ import "./globals.css"
 import { ThemeProvider } from "@/components/theme-provider"
 import { AppStateProvider } from "@/lib/contexts/app-state-context"
 import { Toaster } from "sonner"
+import { Layout } from "@/components/panels/layout"
 
 const inter = Inter({ subsets: ["latin"] })
 
@@ -34,7 +35,9 @@ export default function RootLayout({
       <body className={inter.className}>
         <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
           <AppStateProvider>
-            {children}
+            <Layout>
+              {children}
+            </Layout>
             <Toaster richColors position="top-right" />
           </AppStateProvider>
         </ThemeProvider>

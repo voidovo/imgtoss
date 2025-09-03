@@ -3,14 +3,21 @@
 import type React from "react"
 import { usePathname } from "next/navigation"
 
-import { FileText, ImageIcon, History, Settings, HelpCircle, Menu, Upload, Database } from "lucide-react"
+import { FileText, ImageIcon, History, Settings, Menu, Database, Moon, Sun } from "lucide-react"
 import Image from "next/image"
 import Link from "next/link"
-import { useState } from "react"
+import { useState, useEffect } from "react"
+import { useTheme } from "next-themes"
 
 export default function Sidebar() {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
+  const [mounted, setMounted] = useState(false)
   const pathname = usePathname()
+  const { theme, setTheme } = useTheme()
+
+  useEffect(() => {
+    setMounted(true)
+  }, [])
 
   function handleNavigation() {
     setIsMobileMenuOpen(false)
@@ -53,8 +60,8 @@ export default function Sidebar() {
       </button>
       <nav
         className={`
-                fixed inset-y-0 left-0 z-[70] w-64 bg-white dark:bg-[#0F0F12] transform transition-transform duration-200 ease-in-out
-                lg:translate-x-0 lg:static lg:w-64 border-r border-gray-200 dark:border-[#1F1F23]
+                fixed inset-y-0 left-0 z-[70] w-48 bg-white dark:bg-[#0F0F12] transform transition-transform duration-200 ease-in-out
+                lg:translate-x-0 lg:static lg:w-48 border-r border-gray-200 dark:border-[#1F1F23]
                 ${isMobileMenuOpen ? "translate-x-0" : "-translate-x-full"}
             `}
       >
@@ -111,9 +118,21 @@ export default function Sidebar() {
               <NavItem href="/settings" icon={Settings}>
                 设置
               </NavItem>
-              <NavItem href="/help" icon={HelpCircle}>
-                帮助
-              </NavItem>
+              
+              {/* 主题切换按钮 */}
+              {mounted && (
+                <button
+                  onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+                  className="w-full flex items-center px-3 py-2 text-sm rounded-md transition-colors text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white hover:bg-gray-50 dark:hover:bg-[#1F1F23]"
+                >
+                  {theme === "dark" ? (
+                    <Sun className="h-4 w-4 mr-3 flex-shrink-0" />
+                  ) : (
+                    <Moon className="h-4 w-4 mr-3 flex-shrink-0" />
+                  )}
+                  {theme === "dark" ? "浅色模式" : "深色模式"}
+                </button>
+              )}
             </div>
           </div>
         </div>

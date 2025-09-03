@@ -320,6 +320,9 @@ export async function completeWorkflowExample() {
   }
 }
 
+// Import updater examples
+import { updaterExamples } from './updater-usage-examples';
+
 // Export all examples for easy testing
 export const examples = {
   scanMarkdown: scanMarkdownExample,
@@ -328,4 +331,6 @@ export const examples = {
   manageHistory: manageHistoryExample,
   backupAndRecovery: backupAndRecoveryExample,
   completeWorkflow: completeWorkflowExample,
+  // Updater examples
+  ...updaterExamples,
 };

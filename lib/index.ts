@@ -12,6 +12,13 @@ export {
   historyOperations,
 } from './tauri-api';
 
+// Updater API
+export { 
+  UpdaterAPI, 
+  updaterAPI, 
+  updaterOperations 
+} from './updater-api';
+
 // State Management
 export { AppStateProvider, useAppState } from './contexts/app-state-context';
 export type { UserPreferences, AppState as AppContextState, AppAction } from './contexts/app-state-context';
@@ -80,6 +87,13 @@ export type {
   AppError,
 } from './types';
 
+// Updater types
+export type {
+  UpdateInfo,
+  UpdateProgress,
+  UpdaterError,
+} from './updater-api';
+
 // Enums
 export {
   ScanStatus,
@@ -88,6 +102,12 @@ export {
   FileOperationType,
   ErrorType,
 } from './types';
+
+// Updater enums
+export {
+  UpdateStage,
+  UpdaterErrorType,
+} from './updater-api';
 
 // Usage examples (for development and testing)
 export { examples } from './examples/tauri-usage-examples';
