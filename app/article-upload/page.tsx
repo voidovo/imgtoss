@@ -21,18 +21,15 @@ import { convertFileSrc } from '@tauri-apps/api/core'
 import { tauriAPI } from "@/lib/tauri-api"
 import { FilenameDisplay } from "@/components/ui/filename-display"
 import { formatFileSizeHuman } from "@/lib/utils/format"
+// 导入可复用组件
+import { HistoryRecordList } from "@/components/panels/history-record-list"
+import { StatCardGrid, createArticleUploadStats } from "@/components/panels/stat-card-grid"
+import { OSSConfigDisplay } from "@/components/panels/oss-config-display"
+import { MarkdownUploadArea } from "@/components/panels/upload-area"
 import type { ScanResult, ImageReference, LinkReplacement, OSSConfig, HistoryRecord } from "@/lib/types"
 import { OSSProvider, UploadMode } from "@/lib/types"
 import { copyToClipboardWithToast } from "@/lib/utils/copy-to-clipboard"
 import { useAppState } from "@/lib/contexts/app-state-context"
-
-// Provider display names
-const providerDisplayNames = {
-  [OSSProvider.Aliyun]: "阿里云 OSS",
-  [OSSProvider.Tencent]: "腾讯云 COS",
-  [OSSProvider.AWS]: "Amazon S3",
-  [OSSProvider.Custom]: "自定义 S3"
-}
 
 interface ProcessingState {
   selectedFiles: string[]
@@ -476,7 +473,7 @@ export default function ArticleUploadPage() {
   const selectedCount = state.selectedImages.size
 
   return (
-    <div className="space-y-6">
+    <div className="p-8 space-y-6">
       {/* Error Alert */}
       {state.error && (
         <Alert variant="destructive">
@@ -513,25 +510,12 @@ export default function ArticleUploadPage() {
             <CardTitle className="text-lg">上传配置</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            {/* Storage Provider Info */}
-            {ossConfig && (
-              <div className="p-4 bg-gray-50 dark:bg-gray-800/50 rounded-lg">
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
-                  <div>
-                    <span className="font-medium text-gray-600 dark:text-gray-400">当前供应商:</span>
-                    <div className="mt-1">{providerDisplayNames[ossConfig.provider]}</div>
-                  </div>
-                  <div>
-                    <span className="font-medium text-gray-600 dark:text-gray-400">存储桶:</span>
-                    <div className="mt-1 font-mono">{ossConfig.bucket}</div>
-                  </div>
-                  <div>
-                    <span className="font-medium text-gray-600 dark:text-gray-400">区域:</span>
-                    <div className="mt-1">{ossConfig.region || '默认'}</div>
-                  </div>
-                </div>
-              </div>
-            )}
+            {/* OSS 配置信息 - 使用可复用组件 */}
+            <OSSConfigDisplay 
+              config={ossConfig}
+              showAsAlert={false}
+              onConfigClick={() => window.location.href = '/storage'}
+            />
 
             <div className="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg p-8 text-center">
               <Upload className="h-12 w-12 mx-auto text-gray-400 mb-4" />
@@ -578,23 +562,6 @@ export default function ArticleUploadPage() {
               </div>
             )}
 
-            {/* OSS Configuration Status */}
-            {!ossConfig && (
-              <Alert>
-                <Settings className="h-4 w-4" />
-                <AlertDescription className="flex items-center justify-between">
-                  <span>未找到 OSS 配置。请先配置您的对象存储设置。</span>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => window.location.href = '/storage'}
-                  >
-                    配置存储
-                  </Button>
-                </AlertDescription>
-              </Alert>
-            )}
-
             {/* Detected Images */}
             {detectedImages.length > 0 && (
               <div className="space-y-4">
@@ -639,98 +606,32 @@ export default function ArticleUploadPage() {
               </div>
             )}
 
-            {/* Scan Results Summary */}
+            {/* 扫描结果统计 - 使用可复用组件 */}
             {state.scanResults.length > 0 && (
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-4">
-                <div className="text-center p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
-                  <FileText className="h-6 w-6 mx-auto text-blue-500 mb-1" />
-                  <p className="text-sm text-gray-600 dark:text-gray-400">文件</p>
-                  <p className="text-lg font-bold text-blue-600">{state.scanResults.length}</p>
-                </div>
-                <div className="text-center p-3 bg-green-50 dark:bg-green-900/20 rounded-lg">
-                  <Image className="h-6 w-6 mx-auto text-green-500 mb-1" />
-                  <p className="text-sm text-gray-600 dark:text-gray-400">图片</p>
-                  <p className="text-lg font-bold text-green-600">{detectedImages.length}</p>
-                </div>
-                <div className="text-center p-3 bg-purple-50 dark:bg-purple-900/20 rounded-lg">
-                  <CheckCircle className="h-6 w-6 mx-auto text-purple-500 mb-1" />
-                  <p className="text-sm text-gray-600 dark:text-gray-400">已选择</p>
-                  <p className="text-lg font-bold text-purple-600">{selectedCount}</p>
-                </div>
-                <div className="text-center p-3 bg-orange-50 dark:bg-orange-900/20 rounded-lg">
-                  <AlertCircle className="h-6 w-6 mx-auto text-orange-500 mb-1" />
-                  <p className="text-sm text-gray-600 dark:text-gray-400">缺失</p>
-                  <p className="text-lg font-bold text-orange-600">
-                    {state.scanResults.flatMap(r => r.images).length - detectedImages.length}
-                  </p>
-                </div>
-              </div>
+              <StatCardGrid 
+                stats={createArticleUploadStats({
+                  fileCount: state.scanResults.length,
+                  imageCount: detectedImages.length,
+                  selectedCount: selectedCount,
+                  missingCount: state.scanResults.flatMap(r => r.images).length - detectedImages.length
+                })}
+                columns={{ default: 2, md: 4 }}
+                gap="md"
+                className="mt-4"
+              />
             )}
           </CardContent>
         </Card>
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>最近上传记录</CardTitle>
-          <CardDescription>显示最近的图片上传记录</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-3">
-            {recentHistory.length > 0 ? (
-              recentHistory.map((record) => (
-                <div key={record.id} className="flex items-center justify-between p-3 border rounded-lg">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 bg-gray-200 dark:bg-gray-700 rounded flex items-center justify-center">
-                      <Image className="h-5 w-5 text-gray-500" />
-                    </div>
-                    <div>
-                      <p className="font-medium text-sm">
-                        <FilenameDisplay
-                          filePath={record.files.length > 0 ? record.files[0] : 'Unknown file'}
-                          maxLength={25}
-                          showTooltip={true}
-                        />
-                        {record.files.length > 1 && (
-                          <span className="text-xs text-gray-500 ml-1">
-                            +{record.files.length - 1}个文件
-                          </span>
-                        )}
-                      </p>
-                      <p className="text-xs text-gray-500">
-                        {new Date(record.timestamp).toLocaleString()}
-                      </p>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Badge
-                      variant={record.success ? "default" : "destructive"}
-                      className={record.success ? "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200" : ""}
-                    >
-                      {record.success ? "已上传" : "失败"}
-                    </Badge>
-                    {record.success && record.metadata?.uploaded_url && (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => copyToClipboard(record.metadata.uploaded_url)}
-                      >
-                        <Copy className="h-3 w-3 mr-1" />
-                        复制链接
-                      </Button>
-                    )}
-                  </div>
-                </div>
-              ))
-            ) : (
-              <div className="text-center py-8 text-gray-500">
-                <Image className="h-12 w-12 mx-auto mb-2 text-gray-300" />
-                <p>暂无上传记录</p>
-              </div>
-            )}
-          </div>
-        </CardContent>
-      </Card>
+      {/* 历史记录 - 使用可复用组件 */}
+      <HistoryRecordList
+        records={recentHistory}
+        title="最近上传记录"
+        onCopyLink={copyToClipboard}
+        maxFileNameLength={25}
+        emptyStateText="暂无上传记录"
+      />
 
       <Dialog open={showImageModal} onOpenChange={setShowImageModal}>
         <DialogContent className="max-w-4xl max-h-[80vh]">

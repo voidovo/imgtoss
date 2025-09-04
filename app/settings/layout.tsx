@@ -11,7 +11,7 @@ export default function SettingsLayout({ children }: SettingsLayoutProps) {
   return (
     <div className="flex h-full min-h-screen">
       {/* 左侧边栏 */}
-      <div className="px-2 border-r border-gray-200 dark:border-gray-700 bg-white dark:bg-[#0F0F12]">
+      <div className="w-64 px-2 border-r border-gray-200 dark:border-gray-700 bg-white dark:bg-[#0F0F12]">
         <SettingsSidebar />
       </div>
 
