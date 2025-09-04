@@ -19,7 +19,7 @@ import type {
   ReplacementResult,
   BatchReplacementResult,
   RollbackResult,
-  HistoryRecord,
+  UploadHistoryRecord,
   PaginatedResult,
   HistoryStatistics,
   FileOperation,
@@ -30,7 +30,6 @@ import type {
   ProgressNotification,
   UploadTaskInfo,
   UploadTaskManager,
-  ImageHistoryRecord,
   UploadMode,
 } from './types';
 
@@ -310,8 +309,8 @@ export class TauriAPI {
   /**
    * Get paginated upload history
    */
-  async getUploadHistory(page?: number, pageSize?: number): Promise<PaginatedResult<HistoryRecord>> {
-    return invoke<PaginatedResult<HistoryRecord>>('get_upload_history', { page, pageSize });
+  async getUploadHistory(page?: number, pageSize?: number): Promise<PaginatedResult<UploadHistoryRecord>> {
+    return invoke<PaginatedResult<UploadHistoryRecord>>('get_upload_history', { page, pageSize });
   }
 
   /**
@@ -319,17 +318,15 @@ export class TauriAPI {
    */
   async searchHistory(
     searchTerm?: string,
-    operationType?: string,
-    successOnly?: boolean,
+    uploadMode?: string,
     startDate?: string,
     endDate?: string,
     page?: number,
     pageSize?: number
-  ): Promise<PaginatedResult<HistoryRecord>> {
-    return invoke<PaginatedResult<HistoryRecord>>('search_history', {
+  ): Promise<PaginatedResult<UploadHistoryRecord>> {
+    return invoke<PaginatedResult<UploadHistoryRecord>>('search_history', {
       searchTerm,
-      operationType,
-      successOnly,
+      uploadMode,
       startDate,
       endDate,
       page,
@@ -447,17 +444,17 @@ export class TauriAPI {
   }
 
   /**
-   * 批量添加图片历史记录
+   * 批量添加上传历史记录
    */
-  async addBatchImageHistoryRecords(records: ImageHistoryRecord[]): Promise<string[]> {
-    return invoke<string[]>('add_batch_image_history_records', { records });
+  async addBatchUploadHistoryRecords(records: UploadHistoryRecord[]): Promise<string[]> {
+    return invoke<string[]>('add_batch_upload_history_records', { records });
   }
 
   /**
    * 获取图片历史记录
    */
-  async getImageHistory(uploadMode?: UploadMode, limit?: number): Promise<ImageHistoryRecord[]> {
-    return invoke<ImageHistoryRecord[]>('get_image_history', { uploadMode, limit });
+  async getImageHistory(uploadMode?: UploadMode, limit?: number): Promise<UploadHistoryRecord[]> {
+    return invoke<UploadHistoryRecord[]>('get_image_history', { uploadMode, limit });
   }
 
   /**
@@ -640,13 +637,12 @@ export const historyOperations = {
   getUploadHistory: (page?: number, pageSize?: number) => tauriAPI.getUploadHistory(page, pageSize),
   searchHistory: (
     searchTerm?: string,
-    operationType?: string,
-    successOnly?: boolean,
+    uploadMode?: string,
     startDate?: string,
     endDate?: string,
     page?: number,
     pageSize?: number
-  ) => tauriAPI.searchHistory(searchTerm, operationType, successOnly, startDate, endDate, page, pageSize),
+  ) => tauriAPI.searchHistory(searchTerm, uploadMode, startDate, endDate, page, pageSize),
   clearHistory: () => tauriAPI.clearHistory(),
   exportHistory: () => tauriAPI.exportHistory(),
   exportHistoryToFile: () => tauriAPI.exportHistoryToFile(),

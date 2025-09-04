@@ -2,489 +2,338 @@
 
 import { useState, useMemo, useEffect } from "react"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Badge } from "@/components/ui/badge"
+import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Checkbox } from "@/components/ui/checkbox"
-import {
-  Search,
-  Download,
-  Trash2,
-  Copy,
-  Calendar,
-  FileImage,
-  HardDrive,
-  Hash,
-  Clock,
-  Eye,
-  MoreHorizontal,
-  Loader2,
-  RefreshCw,
-} from "lucide-react"
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { FilenameDisplay } from "@/components/ui/filename-display"
+import { Loader2, Search, Download, Trash2, Copy, Calendar, FileImage, Upload } from "lucide-react"
+import { tauriAPI } from "@/lib/tauri-api"
+import { UploadHistoryRecord, UploadMode } from "@/lib/types"
+import { copyToClipboardWithToast } from "@/lib/utils/copy-to-clipboard"
 import { formatFileSizeHuman } from "@/lib/utils/format"
-import { historyOperations } from "@/lib/tauri-api"
-import type { HistoryRecord, PaginatedResult, HistoryStatistics } from "@/lib/types"
-import { copyToClipboardWithToast, copyImageUrlToClipboard } from "@/lib/utils/copy-to-clipboard"
-
-// Helper function to extract filename from file path
-function extractFilename(filePath: string): string {
-  return filePath.split('/').pop() || filePath;
-}
-
-// Helper function to format date
-function formatDate(dateString: string): string {
-  try {
-    return new Date(dateString).toLocaleString();
-  } catch {
-    return dateString;
-  }
-}
+import { FilenameDisplay } from "@/components/ui/filename-display"
 
 export default function HistoryPage() {
-  const [searchTerm, setSearchTerm] = useState("")
-  const [selectedStatus, setSelectedStatus] = useState("all")
-  const [selectedItems, setSelectedItems] = useState<string[]>([])
-  const [sortBy, setSortBy] = useState("timestamp")
-  const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc")
-  const [currentPage, setCurrentPage] = useState(1)
-  const [pageSize] = useState(20)
-
-  // Data state
-  const [historyData, setHistoryData] = useState<PaginatedResult<HistoryRecord> | null>(null)
-  const [statistics, setStatistics] = useState<HistoryStatistics | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [records, setRecords] = useState<UploadHistoryRecord[]>([])
+  const [searchTerm, setSearchTerm] = useState("")
+  const [filterMode, setFilterMode] = useState<string>("all")
+  const [currentPage, setCurrentPage] = useState(1)
+  const [totalRecords, setTotalRecords] = useState(0)
+  const pageSize = 20
 
-  // Load history data
-  const loadHistoryData = async () => {
+  // 加载历史记录
+  const loadHistory = async (page = 1, search = "", mode = "all") => {
     try {
       setLoading(true)
       setError(null)
-
-      // Determine success filter
-      const successOnly = selectedStatus === "success" ? true :
-        selectedStatus === "failed" ? false : undefined;
-
-      // Use search if there's a search term, otherwise use regular pagination
-      const result = searchTerm.trim()
-        ? await historyOperations.searchHistory(
-          searchTerm,
-          undefined, // operation_type - 不再需要，后端默认过滤上传
-          successOnly,
-          undefined, // start_date
-          undefined, // end_date
-          currentPage,
-          pageSize
-        )
-        : await historyOperations.getUploadHistory(currentPage, pageSize);
-
-      setHistoryData(result);
+      
+      const uploadMode = mode === "all" ? undefined : mode
+      const result = await tauriAPI.searchHistory(
+        search || undefined,
+        uploadMode,
+        undefined, // startDate
+        undefined, // endDate
+        page,
+        pageSize
+      )
+      
+      setRecords(result.items)
+      setTotalRecords(result.total)
+      setCurrentPage(page)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load history data');
+      console.error('Failed to load history:', err)
+      setError(`加载历史记录失败: ${err}`)
     } finally {
-      setLoading(false);
+      setLoading(false)
     }
-  };
+  }
 
-  // Load statistics
-  const loadStatistics = async () => {
+  // 初始加载
+  useEffect(() => {
+    loadHistory()
+  }, [])
+
+  // 搜索和筛选
+  const handleSearch = () => {
+    setCurrentPage(1)
+    loadHistory(1, searchTerm, filterMode)
+  }
+
+  // 复制链接
+  const handleCopyLink = async (url: string) => {
+    await copyToClipboardWithToast(url)
+  }
+
+  // 删除记录
+  const handleDeleteRecord = async (id: string) => {
     try {
-      const stats = await historyOperations.getHistoryStatistics();
-      setStatistics(stats);
+      await tauriAPI.deleteImageHistoryRecord(id)
+      // 重新加载当前页
+      loadHistory(currentPage, searchTerm, filterMode)
     } catch (err) {
-      console.error('Failed to load statistics:', err);
-    }
-  };
-
-  // Load data on component mount and when filters change
-  useEffect(() => {
-    loadHistoryData();
-  }, [searchTerm, selectedStatus, currentPage]);
-
-  // Load statistics on mount
-  useEffect(() => {
-    loadStatistics();
-  }, []);
-
-  // Handle search with debouncing
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      if (currentPage !== 1) {
-        setCurrentPage(1);
-      } else {
-        loadHistoryData();
-      }
-    }, 300);
-
-    return () => clearTimeout(timer);
-  }, [searchTerm]);
-
-  // Sort and filter data locally (for display purposes)
-  const processedData = useMemo(() => {
-    if (!historyData?.items) return [];
-
-    let processed = [...historyData.items];
-
-    // Sort data
-    processed.sort((a, b) => {
-      let aValue: any = a[sortBy as keyof HistoryRecord];
-      let bValue: any = b[sortBy as keyof HistoryRecord];
-
-      if (sortBy === "timestamp") {
-        aValue = new Date(aValue).getTime();
-        bValue = new Date(bValue).getTime();
-      }
-
-      if (sortOrder === "asc") {
-        return aValue > bValue ? 1 : -1;
-      } else {
-        return aValue < bValue ? 1 : -1;
-      }
-    });
-
-    return processed;
-  }, [historyData, sortBy, sortOrder]);
-
-  const handleSelectAll = (checked: boolean) => {
-    if (checked) {
-      setSelectedItems(processedData.map((item) => item.id))
-    } else {
-      setSelectedItems([])
+      console.error('Failed to delete record:', err)
+      setError(`删除记录失败: ${err}`)
     }
   }
 
-  const handleSelectItem = (itemId: string, checked: boolean) => {
-    if (checked) {
-      setSelectedItems([...selectedItems, itemId])
-    } else {
-      setSelectedItems(selectedItems.filter((id) => id !== itemId))
+  // 清空历史记录
+  const handleClearHistory = async () => {
+    if (!confirm('确定要清空所有历史记录吗？此操作不可撤销。')) {
+      return
+    }
+    
+    try {
+      await tauriAPI.clearImageHistory()
+      setRecords([])
+      setTotalRecords(0)
+      setCurrentPage(1)
+    } catch (err) {
+      console.error('Failed to clear history:', err)
+      setError(`清空历史记录失败: ${err}`)
     }
   }
 
-  const copyToClipboard = (text: string) => {
-    copyToClipboardWithToast(text)
-  }
-
-  const copyImageUrl = (url: string) => {
-    copyImageUrlToClipboard(url)
-  }
-
+  // 导出历史记录
   const handleExportHistory = async () => {
     try {
-      await historyOperations.exportHistoryToFile();
+      await tauriAPI.exportHistoryToFile()
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to export history');
-    }
-  };
-
-  const handleClearHistory = async () => {
-    if (confirm('Are you sure you want to clear all history? This action cannot be undone.')) {
-      try {
-        await historyOperations.clearHistory();
-        await loadHistoryData();
-        await loadStatistics();
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to clear history');
-      }
-    }
-  };
-
-  const getStatusBadge = (success: boolean) => {
-    if (success) {
-      return (
-        <Badge variant="default" className="bg-green-100 text-green-800">
-          成功
-        </Badge>
-      )
-    } else {
-      return <Badge variant="destructive">失败</Badge>
+      console.error('Failed to export history:', err)
+      setError(`导出历史记录失败: ${err}`)
     }
   }
 
-  if (error) {
+  // 获取上传模式显示文本
+  const getModeText = (mode: UploadMode) => {
+    switch (mode) {
+      case UploadMode.ImageUpload:
+        return "图片上传"
+      case UploadMode.ArticleUpload:
+        return "文章上传"
+      default:
+        return "未知"
+    }
+  }
+
+  // 获取上传模式图标
+  const getModeIcon = (mode: UploadMode) => {
+    switch (mode) {
+      case UploadMode.ImageUpload:
+        return <FileImage className="h-4 w-4" />
+      case UploadMode.ArticleUpload:
+        return <Upload className="h-4 w-4" />
+      default:
+        return <FileImage className="h-4 w-4" />
+    }
+  }
+
+  // 分页控制
+  const totalPages = Math.ceil(totalRecords / pageSize)
+  const hasNextPage = currentPage < totalPages
+  const hasPrevPage = currentPage > 1
+
+  const handleNextPage = () => {
+    if (hasNextPage) {
+      loadHistory(currentPage + 1, searchTerm, filterMode)
+    }
+  }
+
+  const handlePrevPage = () => {
+    if (hasPrevPage) {
+      loadHistory(currentPage - 1, searchTerm, filterMode)
+    }
+  }
+
+  if (loading && records.length === 0) {
     return (
-      <div className="space-y-6">
+      <div className="p-8 space-y-6">
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-3xl font-bold">历史记录</h1>
             <p className="text-muted-foreground mt-1">管理和查看所有上传的文件记录</p>
           </div>
-          <Button onClick={loadHistoryData} variant="outline">
-            <RefreshCw className="h-4 w-4 mr-2" />
-            重试
-          </Button>
         </div>
         <Card>
           <CardContent className="pt-6">
             <div className="text-center py-12">
-              <div className="text-red-600 mb-4">错误: {error}</div>
-              <Button onClick={loadHistoryData}>重新加载</Button>
+              <Loader2 className="h-8 w-8 animate-spin mx-auto mb-4" />
+              <p>加载中...</p>
             </div>
           </CardContent>
         </Card>
       </div>
-    );
+    )
   }
 
   return (
     <div className="p-8 space-y-6">
-      {/* Header */}
+      {/* 页面标题 */}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold">历史记录</h1>
           <p className="text-muted-foreground mt-1">管理和查看所有上传的文件记录</p>
         </div>
-        <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={handleExportHistory}>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={handleExportHistory}>
             <Download className="h-4 w-4 mr-2" />
-            导出记录
+            导出
           </Button>
-          {selectedItems.length > 0 && (
-            <Button variant="destructive" size="sm" onClick={handleClearHistory}>
-              <Trash2 className="h-4 w-4 mr-2" />
-              删除选中 ({selectedItems.length})
-            </Button>
-          )}
-          <Button variant="outline" size="sm" onClick={loadHistoryData}>
-            <RefreshCw className="h-4 w-4 mr-2" />
-            刷新
+          <Button variant="destructive" onClick={handleClearHistory}>
+            <Trash2 className="h-4 w-4 mr-2" />
+            清空
           </Button>
         </div>
       </div>
 
-      {/* Statistics Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">总图片数</CardTitle>
-            <FileImage className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{statistics?.total_images_processed || 0}</div>
-            <p className="text-xs text-muted-foreground">已上传图片总数</p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">成功操作</CardTitle>
-            <Clock className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-green-600">
-              {statistics?.successful_operations || 0}
-            </div>
-            <p className="text-xs text-muted-foreground">
-              成功率 {statistics ? Math.round(statistics.success_rate) : 0}%
-            </p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">总处理大小</CardTitle>
-            <HardDrive className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{formatFileSizeHuman(statistics?.total_size_processed || 0)}</div>
-            <p className="text-xs text-muted-foreground">累计上传大小</p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">操作记录</CardTitle>
-            <Hash className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{statistics?.total_records || 0}</div>
-            <p className="text-xs text-muted-foreground">历史记录总数</p>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Filters and Search */}
+      {/* 搜索和筛选 */}
       <Card>
-        <CardContent className="pt-6">
-          <div className="flex flex-col md:flex-row gap-4">
+        <CardHeader>
+          <CardTitle>搜索和筛选</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="flex gap-4">
             <div className="flex-1">
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                <Input
-                  placeholder="搜索文件名..."
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  className="pl-10"
-                />
-              </div>
+              <Input
+                placeholder="搜索文件名或链接..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
+              />
             </div>
-
-            <Select value={selectedStatus} onValueChange={setSelectedStatus}>
-              <SelectTrigger className="w-full md:w-[120px]">
-                <SelectValue placeholder="状态" />
+            <Select value={filterMode} onValueChange={setFilterMode}>
+              <SelectTrigger className="w-40">
+                <SelectValue placeholder="上传模式" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">所有状态</SelectItem>
-                <SelectItem value="success">成功</SelectItem>
-                <SelectItem value="failed">失败</SelectItem>
+                <SelectItem value="all">全部</SelectItem>
+                <SelectItem value="ImageUpload">图片上传</SelectItem>
+                <SelectItem value="ArticleUpload">文章上传</SelectItem>
               </SelectContent>
             </Select>
-
-            <Select
-              value={`${sortBy}-${sortOrder}`}
-              onValueChange={(value) => {
-                const [field, order] = value.split("-")
-                setSortBy(field)
-                setSortOrder(order as "asc" | "desc")
-              }}
-            >
-              <SelectTrigger className="w-full md:w-[140px]">
-                <SelectValue placeholder="排序" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="timestamp-desc">最新时间</SelectItem>
-                <SelectItem value="timestamp-asc">最早时间</SelectItem>
-              </SelectContent>
-            </Select>
+            <Button onClick={handleSearch}>
+              <Search className="h-4 w-4 mr-2" />
+              搜索
+            </Button>
           </div>
         </CardContent>
       </Card>
 
-      {/* Records Table */}
+      {/* 错误提示 */}
+      {error && (
+        <Card className="border-red-200 bg-red-50">
+          <CardContent className="pt-6">
+            <div className="text-red-600">{error}</div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* 历史记录列表 */}
       <Card>
-        <CardContent className="p-0">
-          {loading ? (
+        <CardHeader>
+          <CardTitle className="flex items-center justify-between">
+            <span>历史记录 ({totalRecords} 条)</span>
+            {loading && <Loader2 className="h-4 w-4 animate-spin" />}
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {records.length === 0 ? (
             <div className="text-center py-12">
-              <Loader2 className="h-8 w-8 animate-spin mx-auto mb-4" />
-              <p>加载历史记录中...</p>
+              <p className="text-muted-foreground">暂无历史记录</p>
             </div>
           ) : (
-            <>
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="w-12 text-center">
-                      <Checkbox
-                        checked={selectedItems.length === processedData.length && processedData.length > 0}
-                        onCheckedChange={handleSelectAll}
-                      />
-                    </TableHead>
-                    <TableHead>文件</TableHead>
-                    <TableHead>文件大小</TableHead>
-                    <TableHead>上传时间</TableHead>
-                    <TableHead>状态</TableHead>
-                    <TableHead>复制链接</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {processedData.map((item) => (
-                    <TableRow key={item.id}>
-                      <TableCell>
-                        <Checkbox
-                          checked={selectedItems.includes(item.id)}
-                          onCheckedChange={(checked) => handleSelectItem(item.id, checked as boolean)}
+            <div className="space-y-4">
+              {records.map((record) => (
+                <div
+                  key={record.id}
+                  className="flex items-center justify-between p-4 border rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800"
+                >
+                  <div className="flex items-center gap-4 flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      {getModeIcon(record.upload_mode)}
+                      <Badge variant="secondary">
+                        {getModeText(record.upload_mode)}
+                      </Badge>
+                    </div>
+                    
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-1">
+                        <FilenameDisplay
+                          filePath={record.image_name}
+                          className="font-medium"
+                          maxLength={40}
+                          showTooltip={true}
                         />
-                      </TableCell>
-                      <TableCell>
-                        <div className="min-w-0 flex-1">
-                          <div className="font-medium">
-                            <FilenameDisplay
-                              filePath={item.files.length > 0 ? item.files[0] : 'No files'}
-                              maxLength={30}
-                              showTooltip={true}
-                            />
-                          </div>
-                          {item.files.length > 1 && (
-                            <p className="text-sm text-muted-foreground">
-                              +{item.files.length - 1} 个文件
-                            </p>
-                          )}
-                        </div>
-                      </TableCell>
-                      <TableCell className="font-mono text-sm">{formatFileSizeHuman(item.total_size || 0)}</TableCell>
-                      <TableCell>
-                        <div className="flex items-center gap-2">
-                          <Calendar className="h-4 w-4 text-muted-foreground" />
-                          <span className="text-sm">{formatDate(item.timestamp)}</span>
-                        </div>
-                      </TableCell>
-                      <TableCell>{getStatusBadge(item.success)}</TableCell>
-                      <TableCell>
-                        {item.success && item.metadata?.uploaded_url ? (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => copyImageUrl(item.metadata.uploaded_url)}
-                            className="h-8 gap-2"
-                          >
-                            <Copy className="h-4 w-4" />
-                            复制链接
-                          </Button>
-                        ) : (
-                          <span className="text-sm text-muted-foreground">无链接</span>
+                      </div>
+                      
+                      <div className="flex items-center gap-4 text-sm text-muted-foreground">
+                        <span className="flex items-center gap-1">
+                          <Calendar className="h-3 w-3" />
+                          {new Date(record.timestamp).toLocaleString()}
+                        </span>
+                        <span>{formatFileSizeHuman(record.file_size)}</span>
+                        {record.source_file && (
+                          <span>来源: {record.source_file.split('/').pop()}</span>
                         )}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-
-              {processedData.length === 0 && (
-                <div className="text-center py-12">
-                  <FileImage className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-                  <h3 className="text-lg font-medium mb-2">暂无记录</h3>
-                  <p className="text-muted-foreground">
-                    {searchTerm || selectedStatus !== "all"
-                      ? "没有找到符合条件的记录"
-                      : "还没有任何上传记录"}
-                  </p>
-                </div>
-              )}
-
-              {/* Pagination */}
-              {historyData && historyData.total > pageSize && (
-                <div className="flex items-center justify-between px-6 py-4 border-t">
-                  <div className="text-sm text-muted-foreground">
-                    显示 {((currentPage - 1) * pageSize) + 1} 到 {Math.min(currentPage * pageSize, historyData.total)} 条，
-                    共 {historyData.total} 条记录
+                      </div>
+                    </div>
                   </div>
+                  
                   <div className="flex items-center gap-2">
                     <Button
                       variant="outline"
                       size="sm"
-                      onClick={() => setCurrentPage(Math.max(1, currentPage - 1))}
-                      disabled={currentPage === 1}
+                      onClick={() => handleCopyLink(record.uploaded_url)}
                     >
-                      上一页
+                      <Copy className="h-3 w-3 mr-1" />
+                      复制链接
                     </Button>
-                    <span className="text-sm">
-                      第 {currentPage} 页，共 {Math.ceil(historyData.total / pageSize)} 页
-                    </span>
                     <Button
                       variant="outline"
                       size="sm"
-                      onClick={() => setCurrentPage(currentPage + 1)}
-                      disabled={!historyData.has_more}
+                      onClick={() => handleDeleteRecord(record.id)}
                     >
-                      下一页
+                      <Trash2 className="h-3 w-3" />
                     </Button>
                   </div>
                 </div>
-              )}
-            </>
+              ))}
+            </div>
           )}
         </CardContent>
       </Card>
+
+      {/* 分页控制 */}
+      {totalPages > 1 && (
+        <Card>
+          <CardContent className="pt-6">
+            <div className="flex items-center justify-between">
+              <div className="text-sm text-muted-foreground">
+                第 {currentPage} 页，共 {totalPages} 页，总计 {totalRecords} 条记录
+              </div>
+              <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handlePrevPage}
+                  disabled={!hasPrevPage}
+                >
+                  上一页
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleNextPage}
+                  disabled={!hasNextPage}
+                >
+                  下一页
+                </Button>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
     </div>
   )
 }

@@ -61,11 +61,15 @@ pub fn run() {
             search_history,
             clear_history,
             export_history,
-            add_history_record,
             get_history_statistics,
+            // 上传历史记录命令
+            add_upload_history_record,
+            add_batch_upload_history_records,
+            get_upload_history_records,
+            find_duplicate_by_checksum,
+            delete_upload_history_record,
+            clear_upload_history,
             // 图片历史记录命令
-            add_image_history_record,
-            add_batch_image_history_records,
             get_image_history,
             delete_image_history_record,
             clear_image_history,

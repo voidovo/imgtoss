@@ -26,7 +26,7 @@ import { HistoryRecordList } from "@/components/panels/history-record-list"
 import { StatCardGrid, createArticleUploadStats } from "@/components/panels/stat-card-grid"
 import { OSSConfigDisplay } from "@/components/panels/oss-config-display"
 import { MarkdownUploadArea } from "@/components/panels/upload-area"
-import type { ScanResult, ImageReference, LinkReplacement, OSSConfig, HistoryRecord } from "@/lib/types"
+import type { ScanResult, ImageReference, LinkReplacement, OSSConfig, UploadHistoryRecord } from "@/lib/types"
 import { OSSProvider, UploadMode } from "@/lib/types"
 import { copyToClipboardWithToast } from "@/lib/utils/copy-to-clipboard"
 import { useAppState } from "@/lib/contexts/app-state-context"
@@ -57,7 +57,7 @@ export default function ArticleUploadPage() {
     duplicateResults: new Map(),
   })
 
-  const [recentHistory, setRecentHistory] = useState<HistoryRecord[]>([])
+  const [recentHistory, setRecentHistory] = useState<UploadHistoryRecord[]>([])
 
   // 使用全局应用状态获取配置
   const { state: appState } = useAppState()
@@ -91,25 +91,8 @@ export default function ArticleUploadPage() {
       const imageHistory = await tauriAPI.getImageHistory(UploadMode.ArticleUpload, 5)
 
       if (imageHistory.length > 0) {
-        // 转换为兼容的HistoryRecord格式
-        const convertedHistory = imageHistory.map(record => ({
-          id: record.id,
-          timestamp: record.timestamp,
-          operation: "replace",
-          files: [record.original_path],
-          image_count: 1,
-          success: record.success,
-          backup_path: undefined,
-          duration: undefined,
-          total_size: record.file_size,
-          error_message: record.error_message,
-          metadata: {
-            uploaded_url: record.uploaded_url || "",
-            source_file: record.source_file || "",
-            upload_mode: record.upload_mode
-          }
-        }))
-        setRecentHistory(convertedHistory)
+        // 直接使用新的 UploadHistoryRecord，不需要转换
+        setRecentHistory(imageHistory)
       } else {
         // 如果没有图片历史记录，从统一历史记录中筛选
         await loadHistoryFromUnified()
@@ -128,8 +111,7 @@ export default function ArticleUploadPage() {
 
       // 从统一历史记录中筛选文章上传模式的记录
       const filteredHistory = allHistory.items.filter(record => {
-        const isArticleUpload = record.metadata?.upload_mode === UploadMode.ArticleUpload ||
-          record.operation === 'replace' // 兼容旧的记录
+        const isArticleUpload = record.upload_mode === UploadMode.ArticleUpload
         return isArticleUpload
       })
 
@@ -147,24 +129,8 @@ export default function ArticleUploadPage() {
       const imageHistory = await tauriAPI.getImageHistory(UploadMode.ArticleUpload, 3)
 
       if (imageHistory.length > 0) {
-        const convertedHistory = imageHistory.map(record => ({
-          id: record.id,
-          timestamp: record.timestamp,
-          operation: "replace",
-          files: [record.original_path],
-          image_count: 1,
-          success: record.success,
-          backup_path: undefined,
-          duration: undefined,
-          total_size: record.file_size,
-          error_message: record.error_message,
-          metadata: {
-            uploaded_url: record.uploaded_url || "",
-            source_file: record.source_file || "",
-            upload_mode: record.upload_mode
-          }
-        }))
-        setRecentHistory(convertedHistory)
+        // 直接使用新的 UploadHistoryRecord，不需要转换
+        setRecentHistory(imageHistory)
       } else {
         // 如果没有图片历史记录，尝试从统一历史加载
         await loadHistoryFromUnified()
@@ -436,21 +402,18 @@ export default function ArticleUploadPage() {
               id: "", // 后端会生成
               timestamp: new Date().toISOString(),
               image_name: imageInfo.original_path.split(/[\\/]/).pop() || imageInfo.original_path,
-              original_path: imageInfo.absolute_path,
               uploaded_url: replacement.new_link,
               upload_mode: UploadMode.ArticleUpload,
               source_file: replacement.file_path, // 来源Markdown文件
-              success: true,
               file_size: imageInfo.size || 0,
-              error_message: undefined,
-              checksum: undefined
+              checksum: "" // 后端会生成或使用默认值
             })
           }
         }
 
         // 批量添加历史记录
         if (imageHistoryRecords.length > 0) {
-          await tauriAPI.addBatchImageHistoryRecords(imageHistoryRecords)
+          await tauriAPI.addBatchUploadHistoryRecords(imageHistoryRecords)
         }
 
         // 刷新历史记录显示

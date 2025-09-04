@@ -76,7 +76,7 @@ export type {
   RollbackError,
   
   // History types
-  HistoryRecord,
+  UploadHistoryRecord,
   HistoryQuery,
   HistoryStatistics,
   

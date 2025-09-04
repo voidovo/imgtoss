@@ -6,11 +6,11 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { FilenameDisplay } from "@/components/ui/filename-display"
-import type { HistoryRecord } from "@/lib/types"
+import type { UploadHistoryRecord } from "@/lib/types"
 
 interface HistoryRecordListProps {
   /** 历史记录数据 */
-  records: HistoryRecord[]
+  records: UploadHistoryRecord[]
   /** 卡片标题 */
   title?: string
   /** 卡片描述 */
@@ -71,15 +71,15 @@ export function HistoryRecordList({
 }
 
 interface HistoryRecordItemProps {
-  record: HistoryRecord
+  record: UploadHistoryRecord
   onCopyLink?: (url: string) => void | Promise<void>
   maxFileNameLength: number
 }
 
 function HistoryRecordItem({ record, onCopyLink, maxFileNameLength }: HistoryRecordItemProps) {
   const handleCopyClick = async () => {
-    if (onCopyLink && record.metadata?.uploaded_url) {
-      await onCopyLink(record.metadata.uploaded_url)
+    if (onCopyLink && record?.uploaded_url) {
+      await onCopyLink(record.uploaded_url)
     }
   }
 
@@ -92,15 +92,10 @@ function HistoryRecordItem({ record, onCopyLink, maxFileNameLength }: HistoryRec
         <div>
           <p className="font-medium text-sm">
             <FilenameDisplay
-              filePath={record.files.length > 0 ? record.files[0] : 'Unknown file'}
+              filePath={record.image_name || 'Unknown file'}
               maxLength={maxFileNameLength}
               showTooltip={true}
             />
-            {record.files.length > 1 && (
-              <span className="text-xs text-gray-500 ml-1">
-                +{record.files.length - 1}个文件
-              </span>
-            )}
           </p>
           <p className="text-xs text-gray-500">
             {new Date(record.timestamp).toLocaleString()}
@@ -109,12 +104,12 @@ function HistoryRecordItem({ record, onCopyLink, maxFileNameLength }: HistoryRec
       </div>
       <div className="flex items-center gap-2">
         <Badge
-          variant={record.success ? "default" : "destructive"}
-          className={record.success ? "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200" : ""}
+          variant="default"
+          className="bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200"
         >
-          {record.success ? "已上传" : "失败"}
+          已上传
         </Badge>
-        {record.success && record.metadata?.uploaded_url && onCopyLink && (
+        {record.uploaded_url && onCopyLink && (
           <Button
             variant="outline"
             size="sm"

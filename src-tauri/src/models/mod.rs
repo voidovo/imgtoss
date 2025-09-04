@@ -232,33 +232,15 @@ pub struct RollbackError {
 // ============================================================================
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HistoryRecord {
-    pub id: String,
-    pub timestamp: chrono::DateTime<chrono::Utc>,
-    pub operation: String,
-    pub files: Vec<String>,
-    pub image_count: u32,
-    pub success: bool,
-    pub backup_path: Option<String>,
-    pub duration: Option<u64>, // milliseconds
-    pub total_size: Option<u64>, // bytes
-    pub error_message: Option<String>,
-    pub metadata: std::collections::HashMap<String, String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ImageHistoryRecord {
+pub struct UploadHistoryRecord {
     pub id: String,
     pub timestamp: chrono::DateTime<chrono::Utc>,
     pub image_name: String,
-    pub original_path: String,
-    pub uploaded_url: Option<String>,
+    pub uploaded_url: String,
     pub upload_mode: UploadMode,
     pub source_file: Option<String>, // 对于文章上传模式，记录来源Markdown文件
-    pub success: bool,
     pub file_size: u64,
-    pub error_message: Option<String>,
-    pub checksum: Option<String>,
+    pub checksum: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

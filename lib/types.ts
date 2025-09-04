@@ -204,32 +204,15 @@ export interface RollbackError {
 // History and State Types
 // ============================================================================
 
-export interface HistoryRecord {
-  id: string;
-  timestamp: string; // DateTime serialized as ISO string
-  operation: string;
-  files: string[];
-  image_count: number;
-  success: boolean;
-  backup_path?: string;
-  duration?: number; // milliseconds
-  total_size?: number; // bytes
-  error_message?: string;
-  metadata: Record<string, string>;
-}
-
-export interface ImageHistoryRecord {
+export interface UploadHistoryRecord {
   id: string;
   timestamp: string; // DateTime serialized as ISO string
   image_name: string;
-  original_path: string;
-  uploaded_url?: string;
+  uploaded_url: string;
   upload_mode: UploadMode;
   source_file?: string; // 对于文章上传模式，记录来源Markdown文件
-  success: boolean;
   file_size: number;
-  error_message?: string;
-  checksum?: string;
+  checksum: string;
 }
 
 export enum UploadMode {
@@ -299,23 +282,18 @@ export interface AppError {
 // ============================================================================
 
 export interface HistoryQuery {
-  operation_type?: string;
+  upload_mode?: string;
   start_date?: string;
   end_date?: string;
-  success_only?: boolean;
   limit?: number;
   offset?: number;
 }
 
 export interface HistoryStatistics {
   total_records: number;
-  successful_operations: number;
-  failed_operations: number;
-  success_rate: number;
-  operations_by_type: Record<string, number>;
   total_images_processed: number;
   total_size_processed: number;
-  average_duration: number;
+  upload_modes: Record<string, number>;
   oldest_record?: string; // DateTime serialized as ISO string
   newest_record?: string; // DateTime serialized as ISO string
 }
@@ -327,7 +305,7 @@ export interface HistoryStatistics {
 export interface DuplicateCheckResult {
   checksum: string;
   is_duplicate: boolean;
-  existing_record?: HistoryRecord;
+  existing_record?: UploadHistoryRecord;
   existing_url?: string;
 }
 

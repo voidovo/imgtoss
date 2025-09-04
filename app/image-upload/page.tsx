@@ -13,7 +13,7 @@ import { HistoryRecordList } from "@/components/panels/history-record-list"
 import { StatCardGrid, createImageUploadStats } from "@/components/panels/stat-card-grid"
 import { OSSConfigDisplay } from "@/components/panels/oss-config-display"
 import { UploadArea } from "@/components/panels/upload-area"
-import type { HistoryRecord } from "@/lib/types"
+import type { UploadHistoryRecord } from "@/lib/types"
 import { UploadMode } from "@/lib/types"
 import { FilenameDisplay } from "@/components/ui/filename-display"
 import { formatFileSizeHuman } from "@/lib/utils/format"
@@ -40,7 +40,7 @@ export default function ImageUploadPage() {
   const [files, setFiles] = useState<UploadFile[]>([])
   const [isDragging, setIsDragging] = useState(false)
   const [isUploading, setIsUploading] = useState(false)
-  const [recentHistory, setRecentHistory] = useState<HistoryRecord[]>([])
+  const [recentHistory, setRecentHistory] = useState<UploadHistoryRecord[]>([])
   
   // Use global app state for configuration
   const { state: appState } = useAppState()
@@ -60,24 +60,8 @@ export default function ImageUploadPage() {
           const imageHistory = await tauriAPI.getImageHistory(UploadMode.ImageUpload, 5)
           
           if (imageHistory.length > 0) {
-            // 转换ImageHistoryRecord为HistoryRecord格式以兼容显示组件
-            const convertedHistory = imageHistory.map(record => ({
-              id: record.id,
-              timestamp: record.timestamp,
-              operation: "upload",
-              files: [record.original_path],
-              image_count: 1,
-              success: record.success,
-              backup_path: undefined,
-              duration: undefined,
-              total_size: record.file_size,
-              error_message: record.error_message,
-              metadata: {
-                uploaded_url: record.uploaded_url || "",
-                upload_mode: record.upload_mode
-              }
-            }))
-            setRecentHistory(convertedHistory)
+            // 直接使用新的 UploadHistoryRecord，不需要转换
+            setRecentHistory(imageHistory)
           } else {
             // 如果没有图片历史记录，从统一历史记录中筛选
             await loadHistoryFromUnified()
@@ -99,8 +83,7 @@ export default function ImageUploadPage() {
       
       // 从统一历史记录中筛选图片上传模式的记录
       const filteredHistory = allHistory.items.filter(record => {
-        const isImageUpload = record.metadata?.upload_mode === UploadMode.ImageUpload ||
-                              record.operation === 'upload'
+        const isImageUpload = record.upload_mode === UploadMode.ImageUpload
         return isImageUpload
       })
       
@@ -117,23 +100,8 @@ export default function ImageUploadPage() {
       const imageHistory = await tauriAPI.getImageHistory(UploadMode.ImageUpload, 5)
       
       if (imageHistory.length > 0) {
-        const convertedHistory = imageHistory.map(record => ({
-          id: record.id,
-          timestamp: record.timestamp,
-          operation: "upload",
-          files: [record.original_path],
-          image_count: 1,
-          success: record.success,
-          backup_path: undefined,
-          duration: undefined,
-          total_size: record.file_size,
-          error_message: record.error_message,
-          metadata: {
-            uploaded_url: record.uploaded_url || "",
-            upload_mode: record.upload_mode
-          }
-        }))
-        setRecentHistory(convertedHistory)
+        // 直接使用新的 UploadHistoryRecord，不需要转换
+        setRecentHistory(imageHistory)
       } else {
         await loadHistoryFromUnified()
       }

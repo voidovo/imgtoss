@@ -1,13 +1,13 @@
 use crate::models::{
     BackupInfo, BatchReplacementResult, ConfigValidation, ErrorSeverity, HealthError, HealthStatus,
-    HistoryRecord, ImageInfo, LinkReplacement, NotificationConfig, OSSConfig, OSSConnectionTest,
+    ImageInfo, LinkReplacement, NotificationConfig, OSSConfig, OSSConnectionTest,
     ObjectInfo, PaginatedResult, ProgressNotification, ReplacementResult, RollbackResult,
     ScanResult, SystemHealth, UploadProgress, UploadResult, UploadTaskInfo, UploadTaskManager,
-    UploadTaskStatus, ValidationResult, SaveOptions, ImageHistoryRecord, UploadMode,
-    ConfigItem, ConfigCollection,
+    UploadTaskStatus, ValidationResult, SaveOptions, UploadHistoryRecord, UploadMode,
+    ConfigItem, ConfigCollection, FileOperation,
 };
 use crate::services::history_service::{
-    FileOperation, HistoryQuery, HistoryStatistics, OperationType,
+    HistoryQuery, HistoryStatistics,
 };
 use crate::services::{ConfigService, FileService, HistoryService, ImageService, OSSService};
 use crate::utils::error::AppError;
@@ -537,30 +537,26 @@ pub async fn upload_images_with_ids(
                     error: None,
                 });
 
-                // Store in history with checksum
+                // Store in upload history
                 if let Ok(history_service) = HistoryService::new() {
-                    let mut metadata = std::collections::HashMap::new();
-                    metadata.insert("checksum".to_string(), checksum);
-                    metadata.insert("uploaded_url".to_string(), url);
-                    metadata.insert("image_id".to_string(), file_id.clone());
+                    let image_name = std::path::Path::new(&image_path)
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("unknown")
+                        .to_string();
 
-                    let history_record = crate::services::history_service::HistoryRecord {
+                    let history_record = UploadHistoryRecord {
                         id: uuid::Uuid::new_v4().to_string(),
                         timestamp: chrono::Utc::now(),
-                        operation: crate::services::history_service::OperationType::Upload,
-                        files: vec![image_path.clone()],
-                        image_count: 1,
-                        success: true,
-                        backup_path: None,
-                        duration: None,
-                        total_size: Some(
-                            std::fs::metadata(&image_path).map(|m| m.len()).unwrap_or(0),
-                        ),
-                        error_message: None,
-                        metadata,
+                        image_name,
+                        uploaded_url: url,
+                        upload_mode: UploadMode::ImageUpload,
+                        source_file: None,
+                        file_size: std::fs::metadata(&image_path).map(|m| m.len()).unwrap_or(0),
+                        checksum,
                     };
 
-                    let _ = history_service.add_history_record(history_record).await;
+                    let _ = history_service.add_upload_record(history_record).await;
                 }
 
                 // Send final completion progress before cleanup
@@ -595,29 +591,8 @@ pub async fn upload_images_with_ids(
                     error: Some(e.to_string()),
                 });
 
-                // Store failed upload in history
-                if let Ok(history_service) = HistoryService::new() {
-                    let mut metadata = std::collections::HashMap::new();
-                    metadata.insert("image_id".to_string(), file_id.clone());
-
-                    let history_record = crate::services::history_service::HistoryRecord {
-                        id: uuid::Uuid::new_v4().to_string(),
-                        timestamp: chrono::Utc::now(),
-                        operation: crate::services::history_service::OperationType::Upload,
-                        files: vec![image_path.clone()],
-                        image_count: 1,
-                        success: false,
-                        backup_path: None,
-                        duration: None,
-                        total_size: Some(
-                            std::fs::metadata(&image_path).map(|m| m.len()).unwrap_or(0),
-                        ),
-                        error_message: Some(e.to_string()),
-                        metadata,
-                    };
-
-                    let _ = history_service.add_history_record(history_record).await;
-                }
+                // Note: We only record successful uploads in the new design
+                // Failed uploads are not stored in history
 
                 // Send final progress for failed upload (progress remains as is, but ensure UI gets final state)
                 if let Ok(current_progress) = PROGRESS_NOTIFIER.get_progress(&file_id) {
@@ -832,30 +807,26 @@ pub async fn upload_images(
                     error: None,
                 });
 
-                // Store in history with checksum
+                // Store in upload history
                 if let Ok(history_service) = HistoryService::new() {
-                    let mut metadata = std::collections::HashMap::new();
-                    metadata.insert("checksum".to_string(), checksum);
-                    metadata.insert("uploaded_url".to_string(), url);
-                    metadata.insert("image_id".to_string(), image_id.clone());
+                    let image_name = std::path::Path::new(&image_path)
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("unknown")
+                        .to_string();
 
-                    let history_record = crate::services::history_service::HistoryRecord {
+                    let history_record = UploadHistoryRecord {
                         id: uuid::Uuid::new_v4().to_string(),
                         timestamp: chrono::Utc::now(),
-                        operation: crate::services::history_service::OperationType::Upload,
-                        files: vec![image_path.clone()],
-                        image_count: 1,
-                        success: true,
-                        backup_path: None,
-                        duration: None,
-                        total_size: Some(
-                            std::fs::metadata(&image_path).map(|m| m.len()).unwrap_or(0),
-                        ),
-                        error_message: None,
-                        metadata,
+                        image_name,
+                        uploaded_url: url,
+                        upload_mode: UploadMode::ImageUpload,
+                        source_file: None,
+                        file_size: std::fs::metadata(&image_path).map(|m| m.len()).unwrap_or(0),
+                        checksum,
                     };
 
-                    let _ = history_service.add_history_record(history_record).await;
+                    let _ = history_service.add_upload_record(history_record).await;
                 }
 
                 // Send final completion progress before cleanup
@@ -890,29 +861,8 @@ pub async fn upload_images(
                     error: Some(e.to_string()),
                 });
 
-                // Store failed upload in history
-                if let Ok(history_service) = HistoryService::new() {
-                    let mut metadata = std::collections::HashMap::new();
-                    metadata.insert("image_id".to_string(), image_id.clone());
-
-                    let history_record = crate::services::history_service::HistoryRecord {
-                        id: uuid::Uuid::new_v4().to_string(),
-                        timestamp: chrono::Utc::now(),
-                        operation: crate::services::history_service::OperationType::Upload,
-                        files: vec![image_path.clone()],
-                        image_count: 1,
-                        success: false,
-                        backup_path: None,
-                        duration: None,
-                        total_size: Some(
-                            std::fs::metadata(&image_path).map(|m| m.len()).unwrap_or(0),
-                        ),
-                        error_message: Some(e.to_string()),
-                        metadata,
-                    };
-
-                    let _ = history_service.add_history_record(history_record).await;
-                }
+                // Note: We only record successful uploads in the new design
+                // Failed uploads are not stored in history
 
                 // Send final progress for failed upload (progress remains as is, but ensure UI gets final state)
                 if let Ok(current_progress) = PROGRESS_NOTIFIER.get_progress(&image_id) {
@@ -1204,32 +1154,26 @@ pub async fn upload_images_batch(
 
                 let upload_result = match result {
                     Ok((url, checksum)) => {
-                        // Store in history with checksum
+                        // Store in upload history
                         if let Ok(history_service) = HistoryService::new() {
-                            let mut metadata = std::collections::HashMap::new();
-                            metadata.insert("checksum".to_string(), checksum);
-                            metadata.insert("uploaded_url".to_string(), url.clone());
-                            metadata.insert("image_id".to_string(), image_id_clone.clone());
+                            let image_name = std::path::Path::new(&image_path_clone)
+                                .file_name()
+                                .and_then(|n| n.to_str())
+                                .unwrap_or("unknown")
+                                .to_string();
 
-                            let history_record = crate::services::history_service::HistoryRecord {
+                            let history_record = UploadHistoryRecord {
                                 id: uuid::Uuid::new_v4().to_string(),
                                 timestamp: chrono::Utc::now(),
-                                operation: crate::services::history_service::OperationType::Upload,
-                                files: vec![image_path_clone.clone()],
-                                image_count: 1,
-                                success: true,
-                                backup_path: None,
-                                duration: None,
-                                total_size: Some(
-                                    std::fs::metadata(&image_path_clone)
-                                        .map(|m| m.len())
-                                        .unwrap_or(0),
-                                ),
-                                error_message: None,
-                                metadata,
+                                image_name,
+                                uploaded_url: url.clone(),
+                                upload_mode: UploadMode::ImageUpload,
+                                source_file: None,
+                                file_size: std::fs::metadata(&image_path_clone).map(|m| m.len()).unwrap_or(0),
+                                checksum,
                             };
 
-                            let _ = history_service.add_history_record(history_record).await;
+                            let _ = history_service.add_upload_record(history_record).await;
                         }
 
                         UploadResult {
@@ -1240,31 +1184,8 @@ pub async fn upload_images_batch(
                         }
                     }
                     Err(e) => {
-                        // Store failed upload in history
-                        if let Ok(history_service) = HistoryService::new() {
-                            let mut metadata = std::collections::HashMap::new();
-                            metadata.insert("image_id".to_string(), image_id_clone.clone());
-
-                            let history_record = crate::services::history_service::HistoryRecord {
-                                id: uuid::Uuid::new_v4().to_string(),
-                                timestamp: chrono::Utc::now(),
-                                operation: crate::services::history_service::OperationType::Upload,
-                                files: vec![image_path_clone.clone()],
-                                image_count: 1,
-                                success: false,
-                                backup_path: None,
-                                duration: None,
-                                total_size: Some(
-                                    std::fs::metadata(&image_path_clone)
-                                        .map(|m| m.len())
-                                        .unwrap_or(0),
-                                ),
-                                error_message: Some(e.to_string()),
-                                metadata,
-                            };
-
-                            let _ = history_service.add_history_record(history_record).await;
-                        }
+                        // Note: We only record successful uploads in the new design
+                        // Failed uploads are not stored in history
 
                         UploadResult {
                             image_id: image_id_clone.clone(),
@@ -1719,102 +1640,22 @@ pub async fn replace_markdown_links(replacements: Vec<LinkReplacement>) -> Resul
 
 #[tauri::command]
 pub async fn create_backup(file_path: String) -> Result<BackupInfo, String> {
-    // Validate input parameters
-    if file_path.is_empty() {
-        return Err("File path cannot be empty".to_string());
-    }
-
-    // Security check: prevent path traversal
-    if file_path.contains("..") || file_path.contains("~") {
-        return Err("Invalid file path detected".to_string());
-    }
-
-    let path = Path::new(&file_path);
-    if !path.exists() {
-        return Err(format!("File not found: {}", file_path));
-    }
-
-    if !path.is_file() {
-        return Err(format!("Path is not a file: {}", file_path));
-    }
-
-    let history_service = HistoryService::new().map_err(|e| e.to_string())?;
-    let service_backup = history_service
-        .create_backup(&file_path)
-        .await
-        .map_err(|e| e.to_string())?;
-
-    // Convert service backup to model backup
-    Ok(BackupInfo {
-        id: service_backup.id,
-        original_path: service_backup.original_path,
-        backup_path: service_backup.backup_path,
-        timestamp: service_backup.timestamp,
-        size: service_backup.size,
-        checksum: service_backup.checksum,
-    })
+    // 在简化的设计中，我们不再支持备份功能
+    // 返回一个错误提示用户该功能已被移除
+    Err("Backup functionality has been removed in the simplified design".to_string())
 }
 
 #[tauri::command]
 pub async fn restore_from_backup(backup_id: String) -> Result<(), String> {
-    // Validate input parameters
-    if backup_id.is_empty() {
-        return Err("Backup ID cannot be empty".to_string());
-    }
-
-    // Basic UUID format validation
-    if backup_id.len() != 36 || backup_id.chars().filter(|&c| c == '-').count() != 4 {
-        return Err("Invalid backup ID format".to_string());
-    }
-
-    let history_service = HistoryService::new().map_err(|e| e.to_string())?;
-    history_service
-        .restore_from_backup(&backup_id)
-        .await
-        .map_err(|e| e.to_string())?;
-
-    Ok(())
+    // 在简化的设计中，我们不再支持备份功能
+    Err("Backup functionality has been removed in the simplified design".to_string())
 }
 
 #[tauri::command]
 pub async fn list_backups(file_path: Option<String>) -> Result<Vec<BackupInfo>, String> {
-    // Validate input parameters if provided
-    if let Some(ref path) = file_path {
-        if path.is_empty() {
-            return Err("File path cannot be empty".to_string());
-        }
-
-        // Security check: prevent path traversal
-        if path.contains("..") || path.contains("~") {
-            return Err("Invalid file path detected".to_string());
-        }
-    }
-
-    let history_service = HistoryService::new().map_err(|e| e.to_string())?;
-    let service_backups = history_service
-        .get_backups()
-        .await
-        .map_err(|e| e.to_string())?;
-
-    // Convert service backups to model backups
-    let mut backups: Vec<BackupInfo> = service_backups
-        .into_iter()
-        .map(|b| BackupInfo {
-            id: b.id,
-            original_path: b.original_path,
-            backup_path: b.backup_path,
-            timestamp: b.timestamp,
-            size: b.size,
-            checksum: b.checksum,
-        })
-        .collect();
-
-    // Filter by file path if provided
-    if let Some(path) = file_path {
-        backups.retain(|b| b.original_path == path);
-    }
-
-    Ok(backups)
+    // 在简化的设计中，我们不再支持备份功能
+    // 返回空列表
+    Ok(vec![])
 }
 
 #[tauri::command]
@@ -1968,7 +1809,7 @@ pub async fn rollback_file_changes(
 pub async fn get_upload_history(
     page: Option<usize>,
     page_size: Option<usize>,
-) -> Result<PaginatedResult<HistoryRecord>, String> {
+) -> Result<PaginatedResult<UploadHistoryRecord>, String> {
     // Validate pagination parameters
     let (validated_page, validated_page_size) =
         validate_pagination(page, page_size).map_err(|e| e.to_string())?;
@@ -1977,50 +1818,26 @@ pub async fn get_upload_history(
 
     let offset = (validated_page - 1) * validated_page_size;
     let query = HistoryQuery {
-        operation_type: Some(OperationType::Upload), // 只返回上传操作
+        upload_mode: None, // 返回所有上传模式
         start_date: None,
         end_date: None,
-        success_only: None,
         limit: Some(validated_page_size),
         offset: Some(offset),
     };
 
     let service_records = history_service
-        .get_history_records(Some(query))
+        .get_upload_records(Some(query))
         .await
         .map_err(|e| e.to_string())?;
     let all_records = history_service
-        .get_history_records(None)
+        .get_upload_records(None)
         .await
         .map_err(|e| e.to_string())?;
     let total = all_records.len();
 
-    // Convert service records to model records
-    let records: Vec<HistoryRecord> = service_records
-        .into_iter()
-        .map(|r| HistoryRecord {
-            id: r.id,
-            timestamp: r.timestamp,
-            operation: match r.operation {
-                OperationType::Upload => "upload".to_string(),
-                OperationType::Replace => "replace".to_string(),
-                OperationType::Restore => "restore".to_string(),
-                OperationType::Backup => "backup".to_string(),
-                OperationType::Scan => "scan".to_string(),
-            },
-            files: r.files,
-            image_count: r.image_count,
-            success: r.success,
-            backup_path: r.backup_path,
-            duration: r.duration,
-            total_size: r.total_size,
-            error_message: r.error_message,
-            metadata: r.metadata,
-        })
-        .collect();
-
+    // 直接返回服务记录，不需要转换
     Ok(PaginatedResult {
-        items: records,
+        items: service_records,
         total,
         page: validated_page,
         page_size: validated_page_size,
@@ -2031,31 +1848,27 @@ pub async fn get_upload_history(
 #[tauri::command]
 pub async fn search_history(
     search_term: Option<String>,
-    operation_type: Option<String>,
-    success_only: Option<bool>,
+    upload_mode: Option<String>,
     start_date: Option<String>,
     end_date: Option<String>,
     page: Option<usize>,
     page_size: Option<usize>,
-) -> Result<PaginatedResult<HistoryRecord>, String> {
+) -> Result<PaginatedResult<UploadHistoryRecord>, String> {
     // Validate pagination parameters
     let (validated_page, validated_page_size) =
         validate_pagination(page, page_size).map_err(|e| e.to_string())?;
 
     let history_service = HistoryService::new().map_err(|e| e.to_string())?;
 
-    // Parse operation type
-    let parsed_operation_type = if let Some(op) = operation_type {
-        match op.as_str() {
-            "upload" => Some(OperationType::Upload),
-            "replace" => Some(OperationType::Replace),
-            "restore" => Some(OperationType::Restore),
-            "backup" => Some(OperationType::Backup),
-            "scan" => Some(OperationType::Scan),
-            _ => return Err("Invalid operation type".to_string()),
+    // Parse upload mode
+    let parsed_upload_mode = if let Some(mode) = upload_mode {
+        match mode.as_str() {
+            "ImageUpload" => Some(UploadMode::ImageUpload),
+            "ArticleUpload" => Some(UploadMode::ArticleUpload),
+            _ => return Err("Invalid upload mode".to_string()),
         }
     } else {
-        Some(OperationType::Upload) // 默认只返回上传操作
+        None // 返回所有模式
     };
 
     // Parse dates
@@ -2081,105 +1894,32 @@ pub async fn search_history(
 
     let offset = (validated_page - 1) * validated_page_size;
     let query = HistoryQuery {
-        operation_type: parsed_operation_type.clone(),
+        upload_mode: parsed_upload_mode,
         start_date: parsed_start_date,
         end_date: parsed_end_date,
-        success_only,
         limit: Some(validated_page_size),
         offset: Some(offset),
     };
 
     let mut service_records = history_service
-        .get_history_records(Some(query))
+        .get_upload_records(Some(query))
         .await
         .map_err(|e| e.to_string())?;
 
-    // Apply text search filter if provided
-    if let Some(ref term) = search_term {
+    // Apply search term filter if provided
+    if let Some(term) = search_term {
         let term_lower = term.to_lowercase();
         service_records.retain(|record| {
-            // Search in files, operation, and error message
-            record
-                .files
-                .iter()
-                .any(|file| file.to_lowercase().contains(&term_lower))
-                || format!("{:?}", record.operation)
-                    .to_lowercase()
-                    .contains(&term_lower)
-                || record
-                    .error_message
-                    .as_ref()
-                    .map_or(false, |msg| msg.to_lowercase().contains(&term_lower))
+            record.image_name.to_lowercase().contains(&term_lower)
+                || record.uploaded_url.to_lowercase().contains(&term_lower)
+                || record.source_file.as_ref().map_or(false, |f| f.to_lowercase().contains(&term_lower))
         });
     }
 
-    // Get total count for pagination (need to apply same filters)
-    let mut all_records = history_service
-        .get_history_records(None)
-        .await
-        .map_err(|e| e.to_string())?;
-
-    // Apply same filters to get accurate total count
-    if let Some(ref op_type) = parsed_operation_type {
-        all_records
-            .retain(|r| std::mem::discriminant(&r.operation) == std::mem::discriminant(&op_type));
-    }
-    if let Some(start) = parsed_start_date {
-        all_records.retain(|r| r.timestamp >= start);
-    }
-    if let Some(end) = parsed_end_date {
-        all_records.retain(|r| r.timestamp <= end);
-    }
-    if let Some(success_filter) = success_only {
-        if success_filter {
-            all_records.retain(|r| r.success);
-        }
-    }
-    if let Some(ref term) = search_term {
-        let term_lower = term.to_lowercase();
-        all_records.retain(|record| {
-            record
-                .files
-                .iter()
-                .any(|file| file.to_lowercase().contains(&term_lower))
-                || format!("{:?}", record.operation)
-                    .to_lowercase()
-                    .contains(&term_lower)
-                || record
-                    .error_message
-                    .as_ref()
-                    .map_or(false, |msg| msg.to_lowercase().contains(&term_lower))
-        });
-    }
-
-    let total = all_records.len();
-
-    // Convert service records to model records
-    let records: Vec<HistoryRecord> = service_records
-        .into_iter()
-        .map(|r| HistoryRecord {
-            id: r.id,
-            timestamp: r.timestamp,
-            operation: match r.operation {
-                OperationType::Upload => "upload".to_string(),
-                OperationType::Replace => "replace".to_string(),
-                OperationType::Restore => "restore".to_string(),
-                OperationType::Backup => "backup".to_string(),
-                OperationType::Scan => "scan".to_string(),
-            },
-            files: r.files,
-            image_count: r.image_count,
-            success: r.success,
-            backup_path: r.backup_path,
-            duration: r.duration,
-            total_size: r.total_size,
-            error_message: r.error_message,
-            metadata: r.metadata,
-        })
-        .collect();
+    let total = service_records.len();
 
     Ok(PaginatedResult {
-        items: records,
+        items: service_records,
         total,
         page: validated_page,
         page_size: validated_page_size,
@@ -2191,7 +1931,7 @@ pub async fn search_history(
 pub async fn clear_history() -> Result<(), String> {
     let history_service = HistoryService::new().map_err(|e| e.to_string())?;
     history_service
-        .clear_history(None)
+        .clear_upload_history(None, None)
         .await
         .map_err(|e| e.to_string())?;
     Ok(())
@@ -2201,22 +1941,12 @@ pub async fn clear_history() -> Result<(), String> {
 pub async fn export_history() -> Result<String, String> {
     let history_service = HistoryService::new().map_err(|e| e.to_string())?;
     let records = history_service
-        .get_history_records(None)
-        .await
-        .map_err(|e| e.to_string())?;
-    let backups = history_service
-        .get_backups()
-        .await
-        .map_err(|e| e.to_string())?;
-    let operations = history_service
-        .get_file_operations(None)
+        .get_upload_records(None)
         .await
         .map_err(|e| e.to_string())?;
 
     let export_data = serde_json::json!({
         "records": records,
-        "backups": backups,
-        "operations": operations,
         "export_date": chrono::Utc::now().to_rfc3339(),
         "version": "1.0"
     });
@@ -2224,52 +1954,50 @@ pub async fn export_history() -> Result<String, String> {
     serde_json::to_string_pretty(&export_data).map_err(|e| e.to_string())
 }
 
+// 上传历史记录命令
 #[tauri::command]
-pub async fn add_history_record(
-    operation: String,
-    files: Vec<String>,
-    image_count: u32,
-    success: bool,
-    backup_path: Option<String>,
-    duration: Option<u64>,
-    total_size: Option<u64>,
-    error_message: Option<String>,
+pub async fn add_upload_history_record(
+    image_name: String,
+    uploaded_url: String,
+    upload_mode: String,
+    source_file: Option<String>,
+    file_size: u64,
+    checksum: String,
 ) -> Result<String, String> {
-    // Validate input parameters
-    if operation.is_empty() {
-        return Err("Operation cannot be empty".to_string());
+    // 参数验证
+    if image_name.is_empty() {
+        return Err("Image name cannot be empty".to_string());
+    }
+    
+    if uploaded_url.is_empty() {
+        return Err("Uploaded URL cannot be empty".to_string());
     }
 
-    if files.is_empty() {
-        return Err("Files cannot be empty".to_string());
+    if checksum.is_empty() {
+        return Err("Checksum cannot be empty".to_string());
     }
 
-    let operation_type = match operation.as_str() {
-        "upload" => OperationType::Upload,
-        "replace" => OperationType::Replace,
-        "restore" => OperationType::Restore,
-        "backup" => OperationType::Backup,
-        "scan" => OperationType::Scan,
-        _ => return Err("Invalid operation type".to_string()),
+    // 验证上传模式
+    let upload_mode_enum = match upload_mode.as_str() {
+        "ImageUpload" => UploadMode::ImageUpload,
+        "ArticleUpload" => UploadMode::ArticleUpload,
+        _ => return Err("Invalid upload mode".to_string()),
     };
 
     let history_service = HistoryService::new().map_err(|e| e.to_string())?;
-    let record = crate::services::history_service::HistoryRecord {
-        id: String::new(), // Will be generated by the service
+    let record = UploadHistoryRecord {
+        id: String::new(), // 服务将生成ID
         timestamp: chrono::Utc::now(),
-        operation: operation_type,
-        files,
-        image_count,
-        success,
-        backup_path,
-        duration,
-        total_size,
-        error_message,
-        metadata: std::collections::HashMap::new(),
+        image_name,
+        uploaded_url,
+        upload_mode: upload_mode_enum,
+        source_file,
+        file_size,
+        checksum,
     };
 
     history_service
-        .add_history_record(record)
+        .add_upload_record(record)
         .await
         .map_err(|e| e.to_string())
 }
@@ -2283,81 +2011,133 @@ pub async fn get_history_statistics() -> Result<HistoryStatistics, String> {
         .map_err(|e| e.to_string())
 }
 
-// 图片历史记录命令
+// 批量添加上传历史记录
 #[tauri::command]
-pub async fn add_image_history_record(
-    image_name: String,
-    original_path: String,
-    uploaded_url: Option<String>,
-    upload_mode: String,
-    source_file: Option<String>,
-    success: bool,
-    file_size: u64,
-    error_message: Option<String>,
-    checksum: Option<String>,
-) -> Result<String, String> {
-    // 参数验证
-    if image_name.is_empty() {
-        return Err("Image name cannot be empty".to_string());
-    }
-    
-    if original_path.is_empty() {
-        return Err("Original path cannot be empty".to_string());
-    }
-
-    // 验证上传模式
-    let upload_mode_enum = match upload_mode.as_str() {
-        "ImageUpload" => UploadMode::ImageUpload,
-        "ArticleUpload" => UploadMode::ArticleUpload,
-        _ => return Err("Invalid upload mode".to_string()),
-    };
-
-    let history_service = HistoryService::new().map_err(|e| e.to_string())?;
-    let record = ImageHistoryRecord {
-        id: String::new(), // 服务将生成ID
-        timestamp: chrono::Utc::now(),
-        image_name,
-        original_path,
-        uploaded_url,
-        upload_mode: upload_mode_enum,
-        source_file,
-        success,
-        file_size,
-        error_message,
-        checksum,
-    };
-
-    history_service
-        .add_image_history_record(record)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-pub async fn add_batch_image_history_records(
-    records: Vec<ImageHistoryRecord>
+pub async fn add_batch_upload_history_records(
+    records: Vec<UploadHistoryRecord>,
 ) -> Result<Vec<String>, String> {
     if records.is_empty() {
         return Err("Records cannot be empty".to_string());
     }
 
-    if records.len() > 1000 {
-        return Err("Too many records (max 1000)".to_string());
-    }
-
-    // 验证每个记录
-    for (index, record) in records.iter().enumerate() {
+    // 验证每条记录
+    for record in &records {
         if record.image_name.is_empty() {
-            return Err(format!("Image name cannot be empty for record {}", index));
+            return Err("Image name cannot be empty".to_string());
         }
-        if record.original_path.is_empty() {
-            return Err(format!("Original path cannot be empty for record {}", index));
+        if record.uploaded_url.is_empty() {
+            return Err("Uploaded URL cannot be empty".to_string());
+        }
+        if record.checksum.is_empty() {
+            return Err("Checksum cannot be empty".to_string());
         }
     }
 
     let history_service = HistoryService::new().map_err(|e| e.to_string())?;
     history_service
-        .add_batch_image_history_records(records)
+        .add_batch_upload_records(records)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+// 获取上传历史记录
+#[tauri::command]
+pub async fn get_upload_history_records(
+    upload_mode: Option<String>,
+    start_date: Option<String>,
+    end_date: Option<String>,
+    limit: Option<usize>,
+    offset: Option<usize>,
+) -> Result<Vec<UploadHistoryRecord>, String> {
+    let history_service = HistoryService::new().map_err(|e| e.to_string())?;
+    
+    let upload_mode_enum = if let Some(mode) = upload_mode {
+        match mode.as_str() {
+            "ImageUpload" => Some(UploadMode::ImageUpload),
+            "ArticleUpload" => Some(UploadMode::ArticleUpload),
+            _ => return Err("Invalid upload mode".to_string()),
+        }
+    } else {
+        None
+    };
+
+    let start_date_parsed = if let Some(date_str) = start_date {
+        Some(chrono::DateTime::parse_from_rfc3339(&date_str)
+            .map_err(|_| "Invalid start date format")?
+            .with_timezone(&chrono::Utc))
+    } else {
+        None
+    };
+
+    let end_date_parsed = if let Some(date_str) = end_date {
+        Some(chrono::DateTime::parse_from_rfc3339(&date_str)
+            .map_err(|_| "Invalid end date format")?
+            .with_timezone(&chrono::Utc))
+    } else {
+        None
+    };
+
+    let query = HistoryQuery {
+        upload_mode: upload_mode_enum,
+        start_date: start_date_parsed,
+        end_date: end_date_parsed,
+        limit,
+        offset,
+    };
+
+    history_service
+        .get_upload_records(Some(query))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+// 根据checksum查找重复记录
+#[tauri::command]
+pub async fn find_duplicate_by_checksum(checksum: String) -> Result<Option<UploadHistoryRecord>, String> {
+    if checksum.is_empty() {
+        return Err("Checksum cannot be empty".to_string());
+    }
+
+    let history_service = HistoryService::new().map_err(|e| e.to_string())?;
+    history_service
+        .find_duplicate_by_checksum(&checksum)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+// 删除上传历史记录
+#[tauri::command]
+pub async fn delete_upload_history_record(id: String) -> Result<bool, String> {
+    if id.is_empty() {
+        return Err("ID cannot be empty".to_string());
+    }
+
+    let history_service = HistoryService::new().map_err(|e| e.to_string())?;
+    history_service
+        .delete_upload_record(&id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+// 清空上传历史记录
+#[tauri::command]
+pub async fn clear_upload_history(
+    upload_mode: Option<String>,
+    older_than_days: Option<u32>,
+) -> Result<usize, String> {
+    let upload_mode_enum = if let Some(mode) = upload_mode {
+        match mode.as_str() {
+            "ImageUpload" => Some(UploadMode::ImageUpload),
+            "ArticleUpload" => Some(UploadMode::ArticleUpload),
+            _ => return Err("Invalid upload mode".to_string()),
+        }
+    } else {
+        None
+    };
+
+    let history_service = HistoryService::new().map_err(|e| e.to_string())?;
+    history_service
+        .clear_upload_history(upload_mode_enum, older_than_days)
         .await
         .map_err(|e| e.to_string())
 }
@@ -2366,7 +2146,7 @@ pub async fn add_batch_image_history_records(
 pub async fn get_image_history(
     upload_mode: Option<String>,
     limit: Option<usize>
-) -> Result<Vec<ImageHistoryRecord>, String> {
+) -> Result<Vec<UploadHistoryRecord>, String> {
     // 验证限制
     if let Some(limit_val) = limit {
         if limit_val == 0 || limit_val > 1000 {
@@ -2386,8 +2166,17 @@ pub async fn get_image_history(
     };
 
     let history_service = HistoryService::new().map_err(|e| e.to_string())?;
+    
+    let query = HistoryQuery {
+        upload_mode: upload_mode_enum,
+        start_date: None,
+        end_date: None,
+        limit,
+        offset: None,
+    };
+    
     history_service
-        .get_image_history(upload_mode_enum, limit)
+        .get_upload_records(Some(query))
         .await
         .map_err(|e| e.to_string())
 }
@@ -2400,7 +2189,7 @@ pub async fn delete_image_history_record(id: String) -> Result<bool, String> {
 
     let history_service = HistoryService::new().map_err(|e| e.to_string())?;
     history_service
-        .delete_image_history_record(&id)
+        .delete_upload_record(&id)
         .await
         .map_err(|e| e.to_string())
 }
@@ -2423,46 +2212,22 @@ pub async fn clear_image_history(
 
     let history_service = HistoryService::new().map_err(|e| e.to_string())?;
     history_service
-        .clear_image_history(upload_mode_enum, older_than_days)
+        .clear_upload_history(upload_mode_enum, older_than_days)
         .await
         .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn delete_backup(backup_id: String) -> Result<bool, String> {
-    // Validate input parameters
-    if backup_id.is_empty() {
-        return Err("Backup ID cannot be empty".to_string());
-    }
-
-    // Basic UUID format validation
-    if backup_id.len() != 36 || backup_id.chars().filter(|&c| c == '-').count() != 4 {
-        return Err("Invalid backup ID format".to_string());
-    }
-
-    let history_service = HistoryService::new().map_err(|e| e.to_string())?;
-    history_service
-        .delete_backup(&backup_id)
-        .await
-        .map_err(|e| e.to_string())
+    // 在简化的设计中，我们不再支持备份功能
+    Err("Backup functionality has been removed in the simplified design".to_string())
 }
 
 #[tauri::command]
 pub async fn cleanup_old_backups(older_than_days: u32) -> Result<usize, String> {
-    if older_than_days == 0 {
-        return Err("Days must be greater than 0".to_string());
-    }
-
-    if older_than_days > 3650 {
-        // 10 years max
-        return Err("Days cannot exceed 3650".to_string());
-    }
-
-    let history_service = HistoryService::new().map_err(|e| e.to_string())?;
-    history_service
-        .cleanup_old_backups(older_than_days)
-        .await
-        .map_err(|e| e.to_string())
+    // 在简化的设计中，我们不再支持备份功能
+    // 返回0表示没有清理任何备份
+    Ok(0)
 }
 
 #[tauri::command]
@@ -2478,27 +2243,16 @@ pub async fn cleanup_old_history(older_than_days: u32) -> Result<usize, String> 
 
     let history_service = HistoryService::new().map_err(|e| e.to_string())?;
     history_service
-        .clear_history(Some(older_than_days))
+        .clear_upload_history(None, Some(older_than_days))
         .await
         .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn get_file_operations(limit: Option<usize>) -> Result<Vec<FileOperation>, String> {
-    let validated_limit = if let Some(l) = limit {
-        if l > 1000 {
-            return Err("Limit cannot exceed 1000".to_string());
-        }
-        Some(l)
-    } else {
-        None
-    };
-
-    let history_service = HistoryService::new().map_err(|e| e.to_string())?;
-    history_service
-        .get_file_operations(validated_limit)
-        .await
-        .map_err(|e| e.to_string())
+    // 在简化的设计中，我们不再跟踪文件操作
+    // 返回空列表
+    Ok(vec![])
 }
 
 // ============================================================================
@@ -2634,7 +2388,7 @@ pub async fn validate_system_permissions() -> Result<ValidationResult, String> {
 pub struct DuplicateCheckResult {
     pub checksum: String,
     pub is_duplicate: bool,
-    pub existing_record: Option<HistoryRecord>,
+    pub existing_record: Option<UploadHistoryRecord>,
     pub existing_url: Option<String>,
 }
 
@@ -2695,38 +2449,13 @@ pub async fn check_duplicate_by_checksum(checksum: String) -> Result<DuplicateCh
         .map_err(|e| e.to_string())?
     {
         Some(service_record) => {
-            // Convert service record to model record
-            let model_record = HistoryRecord {
-                id: service_record.id,
-                timestamp: service_record.timestamp,
-                operation: match service_record.operation {
-                    crate::services::history_service::OperationType::Upload => "upload".to_string(),
-                    crate::services::history_service::OperationType::Replace => {
-                        "replace".to_string()
-                    }
-                    crate::services::history_service::OperationType::Restore => {
-                        "restore".to_string()
-                    }
-                    crate::services::history_service::OperationType::Backup => "backup".to_string(),
-                    crate::services::history_service::OperationType::Scan => "scan".to_string(),
-                },
-                files: service_record.files,
-                image_count: service_record.image_count,
-                success: service_record.success,
-                backup_path: service_record.backup_path,
-                duration: service_record.duration,
-                total_size: service_record.total_size,
-                error_message: service_record.error_message,
-                metadata: service_record.metadata,
-            };
-
-            // Extract URL from metadata if available
-            let existing_url = model_record.metadata.get("uploaded_url").cloned();
+            // 直接使用 UploadHistoryRecord，不需要转换
+            let existing_url = Some(service_record.uploaded_url.clone());
 
             Ok(DuplicateCheckResult {
                 checksum,
                 is_duplicate: true,
-                existing_record: Some(model_record),
+                existing_record: Some(service_record),
                 existing_url,
             })
         }
@@ -2792,42 +2521,13 @@ pub async fn check_duplicates_batch(
             .map_err(|e| e.to_string())?
         {
             Some(service_record) => {
-                // Convert service record to model record
-                let model_record = HistoryRecord {
-                    id: service_record.id,
-                    timestamp: service_record.timestamp,
-                    operation: match service_record.operation {
-                        crate::services::history_service::OperationType::Upload => {
-                            "upload".to_string()
-                        }
-                        crate::services::history_service::OperationType::Replace => {
-                            "replace".to_string()
-                        }
-                        crate::services::history_service::OperationType::Restore => {
-                            "restore".to_string()
-                        }
-                        crate::services::history_service::OperationType::Backup => {
-                            "backup".to_string()
-                        }
-                        crate::services::history_service::OperationType::Scan => "scan".to_string(),
-                    },
-                    files: service_record.files,
-                    image_count: service_record.image_count,
-                    success: service_record.success,
-                    backup_path: service_record.backup_path,
-                    duration: service_record.duration,
-                    total_size: service_record.total_size,
-                    error_message: service_record.error_message,
-                    metadata: service_record.metadata,
-                };
-
-                // Extract URL from metadata if available
-                let existing_url = model_record.metadata.get("uploaded_url").cloned();
+                // 直接使用 UploadHistoryRecord，不需要转换
+                let existing_url = Some(service_record.uploaded_url.clone());
 
                 results.push(DuplicateCheckResult {
                     checksum,
                     is_duplicate: true,
-                    existing_record: Some(model_record),
+                    existing_record: Some(service_record),
                     existing_url,
                 });
             }
@@ -2865,22 +2565,14 @@ pub async fn get_duplicate_info(checksum: String) -> Result<Option<DuplicateInfo
         .map_err(|e| e.to_string())?
     {
         Some(record) => {
-            let existing_url = record
-                .metadata
-                .get("uploaded_url")
-                .ok_or_else(|| "No URL found in record metadata".to_string())?;
-
-            let file_size = record.total_size.unwrap_or(0);
-            let original_path = record
-                .files
-                .first()
-                .unwrap_or(&"Unknown".to_string())
-                .clone();
+            let existing_url = record.uploaded_url.clone();
+            let file_size = record.file_size;
+            let original_path = record.image_name.clone();
 
             Ok(Some(DuplicateInfo {
                 checksum,
                 original_path,
-                existing_url: existing_url.clone(),
+                existing_url,
                 upload_date: record.timestamp.to_rfc3339(),
                 file_size,
             }))
