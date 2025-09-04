@@ -1,4 +1,4 @@
-name: 测试流水线
+name: 代码合入门禁
 
 on:
   push:
