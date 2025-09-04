@@ -70,7 +70,7 @@ export default function Sidebar() {
             <div className="flex items-center gap-3">
               <div className="w-8 h-8 rounded-lg overflow-hidden">
                 <Image
-                  src="/imgtoss-icon.png"
+                  src="/imgtoss-icon.svg"
                   alt="imgtoss"
                   width={32}
                   height={32}
