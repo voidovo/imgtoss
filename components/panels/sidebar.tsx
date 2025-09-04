@@ -130,7 +130,6 @@ export default function Sidebar() {
                   ) : (
                     <Moon className="h-4 w-4 mr-3 flex-shrink-0" />
                   )}
-                  {theme === "dark" ? "浅色模式" : "深色模式"}
                 </button>
               )}
             </div>

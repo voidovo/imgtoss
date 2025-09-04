@@ -1,29 +1,24 @@
 "use client"
 
 import { useState, useCallback, useRef, useEffect } from "react"
-import { Upload, X, ImageIcon, CheckCircle, AlertCircle, Trash2, Eye, Copy, RefreshCw, Image, Calendar, Settings } from "lucide-react"
+import { X, AlertCircle, Trash2, Eye, Copy } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Progress } from "@/components/ui/progress"
 import { Badge } from "@/components/ui/badge"
-import { Alert, AlertDescription } from "@/components/ui/alert"
 import { convertFileSrc } from '@tauri-apps/api/core'
 import { tauriAPI } from "@/lib/tauri-api"
-import type { OSSConfig, HistoryRecord } from "@/lib/types"
-import { OSSProvider, UploadMode } from "@/lib/types"
+// 导入可复用组件
+import { HistoryRecordList } from "@/components/panels/history-record-list"
+import { StatCardGrid, createImageUploadStats } from "@/components/panels/stat-card-grid"
+import { OSSConfigDisplay } from "@/components/panels/oss-config-display"
+import { UploadArea } from "@/components/panels/upload-area"
+import type { HistoryRecord } from "@/lib/types"
+import { UploadMode } from "@/lib/types"
 import { FilenameDisplay } from "@/components/ui/filename-display"
 import { formatFileSizeHuman } from "@/lib/utils/format"
 import { copyUrlToClipboard, copyImageUrlToClipboard } from "@/lib/utils/copy-to-clipboard"
 import { useAppState } from "@/lib/contexts/app-state-context"
-
-
-// Provider display names
-const providerDisplayNames = {
-  [OSSProvider.Aliyun]: "阿里云 OSS",
-  [OSSProvider.Tencent]: "腾讯云 COS", 
-  [OSSProvider.AWS]: "Amazon S3",
-  [OSSProvider.Custom]: "自定义 S3"
-}
 
 interface UploadFile {
   id: string
@@ -45,7 +40,6 @@ export default function ImageUploadPage() {
   const [files, setFiles] = useState<UploadFile[]>([])
   const [isDragging, setIsDragging] = useState(false)
   const [isUploading, setIsUploading] = useState(false)
-  const fileInputRef = useRef<HTMLInputElement>(null)
   const [recentHistory, setRecentHistory] = useState<HistoryRecord[]>([])
   
   // Use global app state for configuration
@@ -505,7 +499,7 @@ export default function ImageUploadPage() {
   const duplicateFiles = files.filter((f) => f.status === "duplicate").length
 
   return (
-      <div className="space-y-6">
+      <div className="p-8 space-y-6">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -520,111 +514,43 @@ export default function ImageUploadPage() {
           <CardTitle className="text-lg">上传配置</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          {/* Storage Provider Info */}
-          {config && (
-            <div className="p-4 bg-gray-50 dark:bg-gray-800/50 rounded-lg">
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
-                <div>
-                  <span className="font-medium text-gray-600 dark:text-gray-400">当前供应商:</span>
-                  <div className="mt-1">{providerDisplayNames[config.provider]}</div>
-                </div>
-                <div>
-                  <span className="font-medium text-gray-600 dark:text-gray-400">存储桶:</span>
-                  <div className="mt-1 font-mono">{config.bucket}</div>
-                </div>
-                <div>
-                  <span className="font-medium text-gray-600 dark:text-gray-400">区域:</span>
-                  <div className="mt-1">{config.region || '默认'}</div>
-                </div>
-              </div>
-            </div>
-          )}
+          {/* OSS 配置信息 - 使用可复用组件 */}
+          <OSSConfigDisplay 
+            config={config}
+            showAsAlert={false}
+            onConfigClick={() => window.location.href = '/storage'}
+          />
 
-          {/* Upload Area */}
-          <div
-            className={`border-2 border-dashed rounded-lg p-8 text-center transition-colors ${isDragging
-              ? "border-blue-500 bg-blue-50 dark:bg-blue-900/20"
-              : "border-gray-300 dark:border-gray-600 hover:border-gray-400 dark:hover:border-gray-500"
-              }`}
+          {/* 上传区域 - 使用可复用组件 */}
+          <UploadArea
+            isDragging={isDragging}
             onDragOver={handleDragOver}
             onDragLeave={handleDragLeave}
             onDrop={handleDrop}
-          >
-            <Upload className="h-12 w-12 text-gray-400 mx-auto mb-4" />
-            <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-2">拖拽图片到此处或点击选择</h3>
-            <p className="text-gray-600 dark:text-gray-400 mb-4">
-              支持 JPG、PNG、GIF、WebP 格式，单个文件最大 10MB
-            </p>
-            <Button onClick={handleFileSelection}>选择图片</Button>
-            <input
-              ref={fileInputRef}
-              type="file"
-              multiple
-              accept="image/*"
-              onChange={handleFileSelect}
-              className="hidden"
-            />
-          </div>
-
-          {/* OSS Configuration Status */}
-          {!config && (
-            <Alert>
-              <Settings className="h-4 w-4" />
-              <AlertDescription className="flex items-center justify-between">
-                <span>未找到 OSS 配置。请先配置您的对象存储设置。</span>
-                <Button 
-                  size="sm" 
-                  variant="outline"
-                  onClick={() => window.location.href = '/storage'}
-                >
-                  配置存储
-                </Button>
-              </AlertDescription>
-            </Alert>
-          )}
+            onFileSelect={handleFileSelection}
+            onInputChange={handleFileSelect}
+            title="拖拽图片到此处或点击选择"
+            description="支持 JPG、PNG、GIF、WebP 格式，单个文件最大 10MB"
+            buttonText="选择图片"
+            showFileInput={true}
+            multiple={true}
+            acceptedFileTypes="image/*"
+          />
         </CardContent>
       </Card>
 
-      {/* Upload Statistics */}
+      {/* 上传统计 - 使用可复用组件 */}
       {totalFiles > 0 && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <Card>
-            <CardContent className="p-4">
-              <div className="flex items-center gap-2">
-                <ImageIcon className="h-4 w-4 text-blue-500" />
-                <span className="text-sm text-gray-600 dark:text-gray-400">总计</span>
-              </div>
-              <p className="text-2xl font-bold text-gray-900 dark:text-white">{totalFiles}</p>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="p-4">
-              <div className="flex items-center gap-2">
-                <CheckCircle className="h-4 w-4 text-green-500" />
-                <span className="text-sm text-gray-600 dark:text-gray-400">成功</span>
-              </div>
-              <p className="text-2xl font-bold text-green-600">{successFiles}</p>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="p-4">
-              <div className="flex items-center gap-2">
-                <AlertCircle className="h-4 w-4 text-red-500" />
-                <span className="text-sm text-gray-600 dark:text-gray-400">失败</span>
-              </div>
-              <p className="text-2xl font-bold text-red-600">{errorFiles}</p>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="p-4">
-              <div className="flex items-center gap-2">
-                <Upload className="h-4 w-4 text-blue-500" />
-                <span className="text-sm text-gray-600 dark:text-gray-400">上传中</span>
-              </div>
-              <p className="text-2xl font-bold text-blue-600">{uploadingFiles}</p>
-            </CardContent>
-          </Card>
-        </div>
+        <StatCardGrid
+          stats={createImageUploadStats({
+            totalFiles,
+            successFiles,
+            errorFiles,
+            uploadingFiles,
+          })}
+          columns={{ default: 2, md: 4 }}
+          gap="md"
+        />
       )}
 
       {/* File List */}
@@ -742,67 +668,14 @@ export default function ImageUploadPage() {
         </Card>
       )}
 
-      {/* Recent History */}
-      <Card>
-        <CardHeader>
-          <CardTitle>最近上传记录</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-3">
-            {recentHistory.length > 0 ? (
-              recentHistory.map((record) => (
-                <div key={record.id} className="flex items-center justify-between p-3 border rounded-lg">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 bg-gray-200 dark:bg-gray-700 rounded flex items-center justify-center">
-                      <Image className="h-5 w-5 text-gray-500" />
-                    </div>
-                    <div>
-                      <p className="font-medium text-sm">
-                        <FilenameDisplay 
-                          filePath={record.files.length > 0 ? record.files[0] : 'Unknown file'}
-                          maxLength={25}
-                          showTooltip={true}
-                        />
-                        {record.files.length > 1 && (
-                          <span className="text-xs text-gray-500 ml-1">
-                            +{record.files.length - 1}个文件
-                          </span>
-                        )}
-                      </p>
-                      <p className="text-xs text-gray-500">
-                        {new Date(record.timestamp).toLocaleString()}
-                      </p>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Badge 
-                      variant={record.success ? "default" : "destructive"}
-                      className={record.success ? "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200" : ""}
-                    >
-                      {record.success ? "已上传" : "失败"}
-                    </Badge>
-                    {record.success && record.metadata?.uploaded_url && (
-                      <Button 
-                        variant="outline" 
-                        size="sm"
-                        onClick={() => copyImageUrlFromHistory(record.metadata.uploaded_url)}
-                      >
-                        <Copy className="h-3 w-3 mr-1" />
-                        复制链接
-                      </Button>
-                    )}
-                  </div>
-                </div>
-              ))
-            ) : (
-              <div className="text-center py-8 text-gray-500">
-                <Image className="h-12 w-12 mx-auto mb-2 text-gray-300" />
-                <p>暂无上传记录</p>
-              </div>
-            )}
-          </div>
-        </CardContent>
-      </Card>
+      {/* 历史记录 - 使用可复用组件 */}
+      <HistoryRecordList
+        records={recentHistory}
+        title="最近上传记录" 
+        onCopyLink={copyImageUrlFromHistory}
+        maxFileNameLength={25}
+        emptyStateText="暂无上传记录"
+      />
     </div>
   )
 }
