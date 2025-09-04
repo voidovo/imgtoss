@@ -65,7 +65,7 @@ imgtoss 是一款自动化上传图像至对象存储的跨平台应用，支持
 
 ```
 ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   Next.js UI   │    │  Tauri Bridge   │    │ Rust Services   │
+│   Next.js UI    │    │  Tauri Bridge   │    │ Rust Services   │
 │                 │    │                 │    │                 │
 │ • 配置管理      │◄──►│ • 命令处理      │◄──►│ • ConfigService │
 │ • 文件上传      │    │ • 类型转换      │    │ • FileService   │

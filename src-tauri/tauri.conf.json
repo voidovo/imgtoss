@@ -21,12 +21,12 @@
       "csp": "default-src 'self'; img-src 'self' asset: https://asset.localhost data:; script-src 'self'; style-src 'self' 'unsafe-inline'",
       "assetProtocol": {
         "enable": true,
-        "scope": ["**"]
+        "scope": [
+          "**"
+        ]
       }
     }
   },
-
-
   "bundle": {
     "active": true,
     "targets": "all",
@@ -36,16 +36,40 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "publisher": "VoidOvO",
+    "copyright": "Copyright © 2025 VoidOvO. All rights reserved.",
+    "category": "Productivity",
+    "shortDescription": "图像上传管理工具",
+    "longDescription": "ImgToss 是一个功能强大的图像上传管理工具，支持批量上传图片到对象存储服务，并提供 Markdown 文件中图片链接的自动替换功能。",
+    "linux": {
+      "deb": {
+        "depends": [
+          "libwebkit2gtk-4.0-37",
+          "libgtk-3-0",
+          "libayatana-appindicator3-1"
+        ]
+      }
+    },
+    "macOS": {
+      "frameworks": [],
+      "minimumSystemVersion": "10.13",
+      "exceptionDomain": "localhost"
+    },
+    "windows": {
+      "certificateThumbprint": null,
+      "digestAlgorithm": "sha256",
+      "timestampUrl": ""
+    }
   },
   "plugins": {
     "updater": {
       "active": true,
       "endpoints": [
-        "https://github.com/kierandrewett/imgtoss/releases/latest/download/latest.json"
+        "https://github.com/voidovo/imgtoss/releases/latest/download/latest.json"
       ],
       "dialog": true,
-      "pubkey": ""
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEFCNEFENjRGNUQ5MERDMTkKUldRWjNKQmRUOVpLcTN4Z0tXYU5jWjdnVzZocmJIR0h6a1ZIYmFXOWlBQUpIYUVvWEFkQzAvaFUK"
     }
   }
 }
