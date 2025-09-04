@@ -41,6 +41,11 @@ export async function saveRecoveryState(
   options: RecoveryOptions = {}
 ): Promise<void> {
   try {
+    // 检查是否在浏览器环境中
+    if (typeof window === 'undefined') {
+      return
+    }
+    
     const recoveryState: RecoveryState = {
       timestamp: new Date().toISOString(),
       version: RECOVERY_VERSION,
@@ -63,6 +68,11 @@ export async function saveRecoveryState(
  */
 export async function loadRecoveryState(options: RecoveryOptions = {}): Promise<RecoveryState | null> {
   try {
+    // 检查是否在浏览器环境中
+    if (typeof window === 'undefined') {
+      return null
+    }
+    
     const stored = localStorage.getItem(RECOVERY_STORAGE_KEY);
     if (!stored) return null;
 
@@ -97,6 +107,11 @@ export async function loadRecoveryState(options: RecoveryOptions = {}): Promise<
  */
 export function clearRecoveryState(): void {
   try {
+    // 检查是否在浏览器环境中
+    if (typeof window === 'undefined') {
+      return
+    }
+    
     localStorage.removeItem(RECOVERY_STORAGE_KEY);
   } catch (error) {
     console.error('Failed to clear recovery state:', error);
@@ -280,6 +295,11 @@ export async function handleApplicationShutdown(
  */
 export function hasRecoveryState(): boolean {
   try {
+    // 检查是否在浏览器环境中
+    if (typeof window === 'undefined') {
+      return false
+    }
+    
     return localStorage.getItem(RECOVERY_STORAGE_KEY) !== null;
   } catch {
     return false;
@@ -295,6 +315,11 @@ export function getRecoveryStateInfo(): {
   age: number | null;
 } {
   try {
+    // 检查是否在浏览器环境中
+    if (typeof window === 'undefined') {
+      return { exists: false, timestamp: null, age: null }
+    }
+    
     const stored = localStorage.getItem(RECOVERY_STORAGE_KEY);
     if (!stored) {
       return { exists: false, timestamp: null, age: null };

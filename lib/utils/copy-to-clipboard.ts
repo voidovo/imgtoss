@@ -7,6 +7,11 @@ import { toast } from "sonner"
  */
 export async function copyToClipboardWithToast(text: string, label?: string): Promise<void> {
   try {
+    // 检查是否在浏览器环境中
+    if (typeof window === 'undefined' || !navigator?.clipboard) {
+      throw new Error('Clipboard API not available')
+    }
+    
     await navigator.clipboard.writeText(text)
     
     const message = label ? `${label}已复制到剪贴板` : "已复制到剪贴板"
