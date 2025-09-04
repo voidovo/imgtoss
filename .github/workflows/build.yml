@@ -28,7 +28,6 @@ jobs:
     timeout-minutes: 60
     strategy:
       fail-fast: false
-      max-parallel: 2  # 限制并行构建数量
       matrix:
         include:
           - platform: 'linux'
