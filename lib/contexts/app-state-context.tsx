@@ -131,7 +131,7 @@ const initialState: AppState = {
   notifications: [],
   notificationConfig: null,
   isInitialized: false,
-  isOnline: navigator.onLine,
+  isOnline: typeof window !== 'undefined' ? navigator.onLine : true,
   lastSyncTime: null,
   errors: [],
 };
