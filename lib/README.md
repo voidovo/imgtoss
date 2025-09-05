@@ -187,7 +187,6 @@ See `examples/tauri-usage-examples.ts` for complete usage examples including:
 - Configuring OSS storage
 - Uploading images with progress tracking
 - Managing history and statistics
-- File backup and recovery
 - Complete workflow integration
 
 ## Architecture

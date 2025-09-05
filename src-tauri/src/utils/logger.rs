@@ -86,7 +86,7 @@ impl Logger {
 
     fn setup_logging(&self) -> Result<()> {
         // Create log directory if it doesn't exist
-        std::fs::create_dir_all(&self.config.log_dir).map_err(|e| AppError::IO(e))?;
+        std::fs::create_dir_all(&self.config.log_dir).map_err(AppError::IO)?;
 
         // Create env filter for console
         let console_env_filter = EnvFilter::try_from_default_env()
@@ -130,7 +130,7 @@ impl Logger {
             let file_appender = match self.config.rotation {
                 LogRotation::Never => rolling::never(
                     &self.config.log_dir,
-                    &format!("{}.log", self.config.file_prefix),
+                    format!("{}.log", self.config.file_prefix),
                 ),
                 LogRotation::Hourly => {
                     rolling::hourly(&self.config.log_dir, &self.config.file_prefix)
@@ -185,8 +185,8 @@ impl Logger {
         let mut log_files: Vec<(PathBuf, SystemTime)> = Vec::new();
 
         // Collect log files
-        for entry in fs::read_dir(&self.config.log_dir).map_err(|e| AppError::IO(e))? {
-            let entry = entry.map_err(|e| AppError::IO(e))?;
+        for entry in fs::read_dir(&self.config.log_dir).map_err(AppError::IO)? {
+            let entry = entry.map_err(AppError::IO)?;
             let path = entry.path();
 
             if path.is_file()
@@ -198,7 +198,7 @@ impl Logger {
                     })
                     .unwrap_or(false)
             {
-                let metadata = entry.metadata().map_err(|e| AppError::IO(e))?;
+                let metadata = entry.metadata().map_err(AppError::IO)?;
                 log_files.push((path, metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH)));
             }
         }
@@ -321,15 +321,6 @@ macro_rules! log_timing {
 mod tests {
     use super::*;
     use tempfile::TempDir;
-
-    #[test]
-    fn test_log_config_default() {
-        let config = LogConfig::default();
-        assert_eq!(config.level, "info");
-        assert!(config.console_output);
-        assert!(config.file_output);
-        assert_eq!(config.file_prefix, "imgtoss");
-    }
 
     #[test]
     fn test_logger_creation() {

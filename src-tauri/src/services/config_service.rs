@@ -358,7 +358,7 @@ impl ConfigService {
         };
 
         Ok(ConfigValidation {
-            valid: errors.is_empty() && connection_test.as_ref().map_or(false, |t| t.success),
+            valid: errors.is_empty() && connection_test.as_ref().is_some_and(|t| t.success),
             errors,
             connection_test,
         })
@@ -591,25 +591,6 @@ mod tests {
         assert!(service.config_dir.exists());
     }
 
-    // Note: The following tests require a Stronghold instance which is not available in unit tests
-    // These would need to be integration tests or require mocking of the Stronghold API
-
-    #[tokio::test]
-    async fn test_validate_config_valid() {
-        let (service, _temp_dir) = create_test_service().await;
-        let test_config = create_test_config();
-
-        let validation = service.validate_config(&test_config).await.unwrap();
-
-        // Basic validation should pass (connection test may succeed or fail depending on network)
-        assert!(validation.errors.is_empty());
-        assert!(validation.connection_test.is_some());
-
-        let connection_test = validation.connection_test.unwrap();
-        // Don't assert on success/failure as it depends on network connectivity
-        assert!(connection_test.latency.is_some());
-    }
-
     #[tokio::test]
     async fn test_validate_config_invalid() {
         let (service, _temp_dir) = create_test_service().await;
@@ -644,36 +625,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_different_oss_providers() {
-        let (service, _temp_dir) = create_test_service().await;
-
-        let providers = vec![
-            OSSProvider::Aliyun,
-            OSSProvider::Tencent,
-            OSSProvider::AWS,
-            OSSProvider::Custom,
-        ];
-
-        for provider in providers {
-            let mut config = create_test_config();
-            config.provider = provider;
-
-            let validation = service.validate_config(&config).await.unwrap();
-            // Connection may succeed or fail depending on network, but should not panic
-            assert!(validation.connection_test.is_some());
-            if let Some(connection_test) = validation.connection_test {
-                assert!(connection_test.latency.is_some());
-            }
-        }
-    }
-
-    #[tokio::test]
     async fn test_aws_region_handling() {
         let (service, _temp_dir) = create_test_service().await;
 
         // Test us-east-1 (special case)
         let mut config = create_test_config();
-        config.provider = OSSProvider::AWS;
+        config.provider = OSSProvider::Aws;
         config.region = "us-east-1".to_string();
         config.endpoint = "https://s3.amazonaws.com".to_string();
 

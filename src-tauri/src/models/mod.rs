@@ -125,7 +125,7 @@ pub struct ConfigCollection {
 pub enum OSSProvider {
     Aliyun,
     Tencent,
-    AWS,
+    Aws,
     Custom,
 }
 
@@ -159,7 +159,6 @@ pub struct LinkReplacement {
     pub old_link: String,
     pub new_link: String,
 }
-
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileOperation {
@@ -238,7 +237,7 @@ pub enum UploadMode {
     ArticleUpload,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct AppState {
     pub current_files: Vec<String>,
     pub scanned_images: Vec<ImageReference>,
@@ -283,20 +282,6 @@ pub struct SaveOptions {
 // ============================================================================
 // Implementation Helpers
 // ============================================================================
-
-impl Default for AppState {
-    fn default() -> Self {
-        Self {
-            current_files: Vec::new(),
-            scanned_images: Vec::new(),
-            selected_images: Vec::new(),
-            upload_tasks: Vec::new(),
-            oss_config: None,
-            is_scanning: false,
-            is_uploading: false,
-        }
-    }
-}
 
 impl UploadTask {
     #[allow(dead_code)]

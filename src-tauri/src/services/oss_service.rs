@@ -774,8 +774,7 @@ impl OSSProviderTrait for TencentCOS {
         let mut hasher = md5::Context::new();
         hasher.consume(data);
         let digest = hasher.compute();
-        let md5_hash =
-            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &digest.0);
+        let md5_hash = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, digest.0);
 
         log_debug!(
             content_md5_hash = %md5_hash,
@@ -929,7 +928,7 @@ impl OSSProviderTrait for TencentCOS {
     }
 }
 
-// AWS S3 Implementation
+// Aws S3 Implementation
 pub struct AWSS3 {
     config: OSSConfig,
     client: Client,
@@ -1265,7 +1264,7 @@ impl OSSService {
                 log_info!("Creating Tencent COS provider");
                 Box::new(TencentCOS::new(config))
             }
-            OSSProvider::AWS => {
+            OSSProvider::Aws => {
                 log_info!("Creating AWS S3 provider");
                 Box::new(AWSS3::new(config))
             }

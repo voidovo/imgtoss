@@ -19,7 +19,9 @@
       "Bash(cargo fix:*)",
       "Read(/Users/void/Library/Application Support/imgtoss/logs/**)",
       "Read(/Users/void/Library/Application Support/imgtoss/logs/**)",
-      "Bash(chmod:*)"
+      "Bash(chmod:*)",
+      "Bash(./pre-commit-check.sh:*)",
+      "Bash(cargo fmt:*)"
     ],
     "deny": [],
     "ask": []

@@ -41,7 +41,7 @@
     "copyright": "Copyright © 2025 VoidOvO. All rights reserved.",
     "category": "Productivity",
     "shortDescription": "图像上传管理工具",
-    "longDescription": "ImgToss 是一个功能强大的图像上传管理工具，支持批量上传图片到对象存储服务，并提供 Markdown 文件中图片链接的自动替换功能。",
+    "longDescription": "imgtoss 是一个功能强大的图像上传管理工具，支持批量上传图片到对象存储服务，并提供 Markdown 文件中图片链接的自动替换功能。",
     "linux": {
       "deb": {
         "depends": [

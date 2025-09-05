@@ -283,7 +283,7 @@ jobs:
     steps:
       - name: 发送发布通知
         run: |
-          echo "🎉 ImgToss ${{ github.ref_name }} 发布完成!"
+          echo "🎉 imgtoss ${{ github.ref_name }} 发布完成!"
           echo "📦 下载地址: https://github.com/${{ github.repository }}/releases/tag/${{ github.ref_name }}"
           echo "🔄 自动更新清单已生成"
           echo "🛡️ 安全扫描已完成"

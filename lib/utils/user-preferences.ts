@@ -1,4 +1,4 @@
-// User preferences management for ImgToss
+// User preferences management for imgtoss
 // Handles local storage of user preferences for different upload modes
 
 import type { OSSProvider } from '@/lib/types'

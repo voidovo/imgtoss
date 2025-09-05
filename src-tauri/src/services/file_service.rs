@@ -1,6 +1,6 @@
 use crate::models::{
-    BatchReplacementResult, ImageReference, LinkReplacement, ReplacementError,
-    ReplacementResult, RollbackError, RollbackResult, ScanResult, ScanStatus,
+    BatchReplacementResult, ImageReference, LinkReplacement, ReplacementError, ReplacementResult,
+    ScanResult, ScanStatus,
 };
 use crate::services::ImageService;
 use crate::utils::{AppError, Result};
@@ -375,7 +375,7 @@ impl FileService {
 
             file_groups
                 .entry(replacement.file_path.clone())
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push(replacement);
         }
 
@@ -459,7 +459,6 @@ impl FileService {
             timestamp: SystemTime::now(),
         })
     }
-
 }
 
 #[cfg(test)]
@@ -499,9 +498,6 @@ mod tests {
     async fn test_file_service_creation() {
         let service = FileService::new();
         assert!(service.is_ok());
-
-        let service = service.unwrap();
-        assert!(service.get_backup_dir().exists());
     }
 
     #[tokio::test]
@@ -615,7 +611,7 @@ This should be ignored: ![Remote](https://example.com/image.png)
 
         // Create second markdown file
         let md2_content = "![Missing](./missing.jpg)";
-        let md2_file = create_temp_md_file(&md2_content).await.unwrap();
+        let md2_file = create_temp_md_file(md2_content).await.unwrap();
 
         let service = FileService::new().unwrap();
         let results = service
@@ -637,115 +633,6 @@ This should be ignored: ![Remote](https://example.com/image.png)
         assert!(matches!(results[1].status, ScanStatus::Success));
         assert_eq!(results[1].images.len(), 1);
         assert!(!results[1].images[0].exists);
-    }
-
-    #[tokio::test]
-    async fn test_backup_file() {
-        let temp_dir = tempdir().unwrap();
-        let test_file = temp_dir.path().join("test.md");
-        let test_content = "# Test Content\n\nThis is a test file.";
-
-        async_fs::write(&test_file, test_content).await.unwrap();
-
-        let service = FileService::new().unwrap();
-        let backup_info = service
-            .backup_file(&test_file.to_string_lossy())
-            .await
-            .unwrap();
-
-        // Verify backup info
-        assert!(!backup_info.id.is_empty());
-        assert_eq!(backup_info.original_path, test_file.to_string_lossy());
-        assert!(backup_info.size > 0);
-
-        // Verify backup file exists and has correct content
-        let backup_path = Path::new(&backup_info.backup_path);
-        assert!(backup_path.exists());
-
-        let backup_content = async_fs::read_to_string(backup_path).await.unwrap();
-        assert_eq!(backup_content, test_content);
-    }
-
-    #[tokio::test]
-    async fn test_backup_nonexistent_file() {
-        let service = FileService::new().unwrap();
-        let result = service.backup_file("/nonexistent/file.md").await;
-
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("not found"));
-    }
-
-    #[tokio::test]
-    async fn test_restore_from_backup() {
-        let temp_dir = tempdir().unwrap();
-        let original_file = temp_dir.path().join("original.md");
-        let original_content = "Original content";
-
-        // Create original file
-        async_fs::write(&original_file, original_content)
-            .await
-            .unwrap();
-
-        let service = FileService::new().unwrap();
-
-        // Create backup
-        let backup_info = service
-            .backup_file(&original_file.to_string_lossy())
-            .await
-            .unwrap();
-
-        // Modify original file
-        let modified_content = "Modified content";
-        async_fs::write(&original_file, modified_content)
-            .await
-            .unwrap();
-
-        // Verify file was modified
-        let current_content = async_fs::read_to_string(&original_file).await.unwrap();
-        assert_eq!(current_content, modified_content);
-
-        // Restore from backup
-        service
-            .restore_from_backup(&backup_info.backup_path, &original_file.to_string_lossy())
-            .await
-            .unwrap();
-
-        // Verify restoration
-        let restored_content = async_fs::read_to_string(&original_file).await.unwrap();
-        assert_eq!(restored_content, original_content);
-    }
-
-    #[tokio::test]
-    async fn test_restore_from_nonexistent_backup() {
-        let service = FileService::new().unwrap();
-        let result = service
-            .restore_from_backup("/nonexistent/backup.backup", "/some/file.md")
-            .await;
-
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("not found"));
-    }
-
-    #[tokio::test]
-    async fn test_clean_old_backups() {
-        let service = FileService::new().unwrap();
-        let backup_dir = service.get_backup_dir();
-
-        // Create some test backup files
-        let old_backup = backup_dir.join("old_backup.backup");
-        let recent_backup = backup_dir.join("recent_backup.backup");
-
-        async_fs::write(&old_backup, "old content").await.unwrap();
-        async_fs::write(&recent_backup, "recent content")
-            .await
-            .unwrap();
-
-        // Note: Setting file times requires platform-specific code
-        // For this test, we'll just verify the function runs without error
-        let cleaned_count = service.clean_old_backups(7).await.unwrap();
-
-        // The function should run successfully (cleaned_count is always >= 0 as usize)
-        assert!(cleaned_count < 1000); // Just verify it's a reasonable number
     }
 
     #[tokio::test]
@@ -795,7 +682,7 @@ This should be ignored: ![Remote](https://example.com/image.png)
 
         assert_eq!(images.len(), 8);
 
-        let expected_paths = vec![
+        let expected_paths = [
             "./test.png",
             "./test.jpg",
             "./test.jpeg",
@@ -868,10 +755,6 @@ This should be ignored: ![Remote](https://example.com/image.png)
         println!("Updated content: '{}'", updated_content);
         assert!(updated_content.contains("https://cdn.example.com/test.png"));
         assert!(!updated_content.contains("./images/test.png"));
-
-        // Verify backup was created
-        assert!(!result.backup_info.backup_path.is_empty());
-        assert!(Path::new(&result.backup_info.backup_path).exists());
     }
 
     #[tokio::test]
@@ -1040,51 +923,6 @@ This should be ignored: ![Remote](https://example.com/image.png)
     }
 
     #[tokio::test]
-    async fn test_rollback_replacements() {
-        let temp_dir = tempdir().unwrap();
-        let md_file = temp_dir.path().join("test.md");
-
-        let original_content = r#"![Image](./img.png)"#;
-        async_fs::write(&md_file, original_content).await.unwrap();
-
-        let service = FileService::new().unwrap();
-
-        // Make a replacement
-        let replacements = vec![LinkReplacement {
-            file_path: md_file.to_string_lossy().to_string(),
-            line: 1,
-            column: 10,
-            old_link: "./img.png".to_string(),
-            new_link: "https://cdn.example.com/img.png".to_string(),
-        }];
-
-        let replacement_result = service
-            .replace_image_links(&md_file.to_string_lossy(), replacements)
-            .await
-            .unwrap();
-
-        // Verify the replacement was made
-        let modified_content = async_fs::read_to_string(&md_file).await.unwrap();
-        assert!(modified_content.contains("https://cdn.example.com/img.png"));
-
-        // Now rollback the changes
-        let rollback_result = service
-            .rollback_replacements(vec![replacement_result.backup_info])
-            .await
-            .unwrap();
-
-        assert_eq!(rollback_result.total_files, 1);
-        assert_eq!(rollback_result.successful_rollbacks, 1);
-        assert_eq!(rollback_result.failed_rollbacks.len(), 0);
-
-        // Verify the file was restored to original content
-        let restored_content = async_fs::read_to_string(&md_file).await.unwrap();
-        assert_eq!(restored_content, original_content);
-        assert!(restored_content.contains("./img.png"));
-        assert!(!restored_content.contains("https://cdn.example.com/img.png"));
-    }
-
-    #[tokio::test]
     async fn test_replace_nonexistent_file() {
         let service = FileService::new().unwrap();
 
@@ -1144,29 +982,5 @@ This should be ignored: ![Remote](https://example.com/image.png)
         assert!(updated_content.contains("https://cdn.example.com/img2.jpg"));
         assert!(!updated_content.contains("./img1.png"));
         assert!(!updated_content.contains("./img2.jpg"));
-    }
-
-    #[tokio::test]
-    async fn test_rollback_with_nonexistent_backup() {
-        let service = FileService::new().unwrap();
-
-        let fake_backup = BackupInfo {
-            id: uuid::Uuid::new_v4().to_string(),
-            original_path: "/some/file.md".to_string(),
-            backup_path: "/nonexistent/backup.backup".to_string(),
-            timestamp: chrono::Utc::now(),
-            size: 100,
-            checksum: None,
-        };
-
-        let result = service
-            .rollback_replacements(vec![fake_backup])
-            .await
-            .unwrap();
-
-        assert_eq!(result.total_files, 1);
-        assert_eq!(result.successful_rollbacks, 0);
-        assert_eq!(result.failed_rollbacks.len(), 1);
-        assert!(result.failed_rollbacks[0].error.contains("not found"));
     }
 }

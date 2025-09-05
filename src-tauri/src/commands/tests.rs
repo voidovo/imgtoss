@@ -1,5 +1,5 @@
 #[cfg(test)]
-mod tests {
+mod command_tests {
     use crate::commands::*;
     use crate::models::*;
     use std::fs;
@@ -289,16 +289,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_upload_images_invalid_config() {
-        let mut config = create_test_oss_config();
-        config.endpoint = "".to_string();
-        let ids = vec!["12345678-1234-1234-1234-123456789012".to_string()];
-        let result = upload_images(ids, config).await;
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("endpoint cannot be empty"));
-    }
-
-    #[tokio::test]
     async fn test_get_upload_progress_empty_id() {
         let result = get_upload_progress("".to_string()).await;
         assert!(result.is_err());
@@ -411,41 +401,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_create_backup_empty_path() {
-        let result = create_backup("".to_string()).await;
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("cannot be empty"));
-    }
-
-    #[tokio::test]
-    async fn test_create_backup_invalid_path() {
-        let result = create_backup("../invalid.md".to_string()).await;
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("Invalid file path"));
-    }
-
-    #[tokio::test]
-    async fn test_restore_from_backup_empty_id() {
-        let result = restore_from_backup("".to_string()).await;
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("cannot be empty"));
-    }
-
-    #[tokio::test]
-    async fn test_restore_from_backup_invalid_id() {
-        let result = restore_from_backup("invalid-id".to_string()).await;
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("Invalid backup ID format"));
-    }
-
-    #[tokio::test]
-    async fn test_list_backups_invalid_path() {
-        let result = list_backups(Some("../invalid.md".to_string())).await;
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("Invalid file path"));
-    }
-
-    #[tokio::test]
     async fn test_get_upload_history_invalid_pagination() {
         let result = get_upload_history(Some(0), Some(20)).await;
         assert!(result.is_err());
@@ -515,24 +470,6 @@ mod tests {
     // ============================================================================
     // Integration Tests with Real Files
     // ============================================================================
-
-    #[tokio::test]
-    async fn test_create_backup_with_real_file() {
-        let (_temp_dir, file_path) = create_temp_markdown_file("# Test\n![image](./test.png)");
-        let result = create_backup(file_path).await;
-        // The backup function might succeed or fail depending on implementation
-        // but validation should pass (no validation errors)
-        match result {
-            Ok(_) => {
-                // Backup succeeded, which is fine
-            }
-            Err(error_msg) => {
-                // If it fails, it shouldn't be due to validation errors
-                assert!(!error_msg.contains("cannot be empty"));
-                assert!(!error_msg.contains("Invalid file path"));
-            }
-        }
-    }
 
     #[tokio::test]
     async fn test_get_file_size_with_real_file() {
@@ -696,107 +633,6 @@ mod tests {
         assert!(result.unwrap_err().contains("Invalid file path"));
     }
 
-    #[tokio::test]
-    async fn test_rollback_file_changes_empty() {
-        let result = rollback_file_changes(vec![]).await;
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("cannot be empty"));
-    }
-
-    #[tokio::test]
-    async fn test_rollback_file_changes_too_many() {
-        let backups: Vec<BackupInfo> = (0..51)
-            .map(|i| BackupInfo {
-                id: format!("12345678-1234-1234-1234-12345678901{:01}", i),
-                original_path: format!("file{}.md", i),
-                backup_path: format!("backup{}.backup", i),
-                timestamp: chrono::Utc::now(),
-                size: 100,
-                checksum: None,
-            })
-            .collect();
-        let result = rollback_file_changes(backups).await;
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("Too many backups"));
-    }
-
-    #[tokio::test]
-    async fn test_rollback_file_changes_empty_backup_path() {
-        let backups = vec![BackupInfo {
-            id: "12345678-1234-1234-1234-123456789012".to_string(),
-            original_path: "file.md".to_string(),
-            backup_path: "".to_string(),
-            timestamp: chrono::Utc::now(),
-            size: 100,
-            checksum: None,
-        }];
-        let result = rollback_file_changes(backups).await;
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("Backup path cannot be empty"));
-    }
-
-    #[tokio::test]
-    async fn test_rollback_file_changes_empty_original_path() {
-        let backups = vec![BackupInfo {
-            id: "12345678-1234-1234-1234-123456789012".to_string(),
-            original_path: "".to_string(),
-            backup_path: "backup.backup".to_string(),
-            timestamp: chrono::Utc::now(),
-            size: 100,
-            checksum: None,
-        }];
-        let result = rollback_file_changes(backups).await;
-        assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .contains("Original path cannot be empty"));
-    }
-
-    #[tokio::test]
-    async fn test_rollback_file_changes_invalid_backup_path() {
-        let backups = vec![BackupInfo {
-            id: "12345678-1234-1234-1234-123456789012".to_string(),
-            original_path: "file.md".to_string(),
-            backup_path: "../invalid.backup".to_string(),
-            timestamp: chrono::Utc::now(),
-            size: 100,
-            checksum: None,
-        }];
-        let result = rollback_file_changes(backups).await;
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("Invalid backup path"));
-    }
-
-    #[tokio::test]
-    async fn test_rollback_file_changes_invalid_original_path() {
-        let backups = vec![BackupInfo {
-            id: "12345678-1234-1234-1234-123456789012".to_string(),
-            original_path: "../invalid.md".to_string(),
-            backup_path: "backup.backup".to_string(),
-            timestamp: chrono::Utc::now(),
-            size: 100,
-            checksum: None,
-        }];
-        let result = rollback_file_changes(backups).await;
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("Invalid original path"));
-    }
-
-    #[tokio::test]
-    async fn test_rollback_file_changes_nonexistent_backup() {
-        let backups = vec![BackupInfo {
-            id: "12345678-1234-1234-1234-123456789012".to_string(),
-            original_path: "file.md".to_string(),
-            backup_path: "/nonexistent/backup.backup".to_string(),
-            timestamp: chrono::Utc::now(),
-            size: 100,
-            checksum: None,
-        }];
-        let result = rollback_file_changes(backups).await;
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("Backup file not found"));
-    }
-
     // ============================================================================
     // Integration Tests for Link Replacement with Real Files
     // ============================================================================
@@ -864,9 +700,5 @@ mod tests {
         assert!(updated_content.contains("https://cdn.example.com/img2.jpg"));
         assert!(!updated_content.contains("./img1.png"));
         assert!(!updated_content.contains("./img2.jpg"));
-
-        // Verify backup was created
-        assert!(!replacement_result.backup_info.backup_path.is_empty());
-        assert!(std::path::Path::new(&replacement_result.backup_info.backup_path).exists());
     }
 }

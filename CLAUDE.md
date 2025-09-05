@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-ImgToss 是一个图像上传管理工具，结合了 Next.js 前端和 Tauri 后端的跨平台桌面应用。应用支持自动化上传图像至对象存储服务（OSS），并提供了 Markdown 文件中图片链接的批量替换功能。
+imgtoss 是一个图像上传管理工具，结合了 Next.js 前端和 Tauri 后端的跨平台桌面应用。应用支持自动化上传图像至对象存储服务（OSS），并提供了 Markdown 文件中图片链接的批量替换功能。
 
 ## Architecture
 
@@ -106,8 +106,6 @@ The Tauri backend provides a comprehensive command API with the following catego
 
 ### File Operations Commands
 - Markdown link replacement
-- Backup and restore functionality
-- File operation rollback
 
 ### History and Progress Commands
 - Upload history with pagination
@@ -133,7 +131,7 @@ The Tauri backend provides a comprehensive command API with the following catego
 - **ImageService**: File processing, thumbnail generation, duplicate detection
 - **OSSService**: Multi-cloud storage operations (Aliyun, Tencent, AWS S3)
 - **HistoryService**: Upload tracking with SQLite persistence
-- **FileService**: Markdown parsing and link replacement with backup/restore
+- **FileService**: Markdown parsing and link replacement
 
 ## Security Features
 

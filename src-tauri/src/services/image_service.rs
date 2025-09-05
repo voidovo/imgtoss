@@ -491,8 +491,7 @@ impl ImageService {
             } else {
                 // Calculate quality based on compression ratio needed
                 let ratio = target_kb as f32 / current_size_kb as f32;
-                let quality = (ratio * 100.0).min(95.0).max(30.0) as u8;
-                quality
+                (ratio * 100.0).clamp(30.0, 95.0) as u8
             }
         } else {
             // Default quality based on image dimensions
@@ -650,8 +649,8 @@ mod tests {
 
         // For 800x600 image with max size 150, width should be around 150 and height around 112
         // Allow for small rounding differences
-        assert!(thumb_width >= 149 && thumb_width <= 150);
-        assert!(thumb_height >= 112 && thumb_height <= 113);
+        assert!((149..=150).contains(&thumb_width));
+        assert!((112..=113).contains(&thumb_height));
     }
 
     #[tokio::test]
@@ -671,8 +670,8 @@ mod tests {
 
         // For 600x800 image with max size 150, height should be around 150 and width around 112
         // Allow for small rounding differences
-        assert!(thumb_width >= 112 && thumb_width <= 113);
-        assert!(thumb_height >= 149 && thumb_height <= 150);
+        assert!((112..=113).contains(&thumb_width));
+        assert!((149..=150).contains(&thumb_height));
     }
 
     #[tokio::test]

@@ -1,10 +1,10 @@
 # CI/CD 流水线配置文档
 
-本文档详细说明了 ImgToss 项目的 GitHub Actions CI/CD 流水线配置，包括测试、构建和发布三个主要工作流。
+本文档详细说明了 imgtoss 项目的 GitHub Actions CI/CD 流水线配置，包括测试、构建和发布三个主要工作流。
 
 ## 概述
 
-ImgToss 使用 GitHub Actions 实现完整的 CI/CD 流水线，支持：
+imgtoss 使用 GitHub Actions 实现完整的 CI/CD 流水线，支持：
 - ✅ 自动化测试（前端 + 后端）
 - 🏗️ 跨平台构建（Linux、macOS、Windows）
 - 🚀 自动发布到 GitHub Releases
@@ -348,7 +348,7 @@ ImgToss 使用 GitHub Actions 实现完整的 CI/CD 流水线，支持：
 
 ## 总结
 
-ImgToss 的 CI/CD 流水线提供了完整的自动化解决方案：
+imgtoss 的 CI/CD 流水线提供了完整的自动化解决方案：
 
 - 🧪 **全面测试**：前端、后端、集成测试全覆盖
 - 🏗️ **跨平台构建**：支持 Linux、macOS、Windows 三大平台

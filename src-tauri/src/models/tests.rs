@@ -1,5 +1,5 @@
 #[cfg(test)]
-mod tests {
+mod models_tests {
     use crate::models::*;
 
     #[test]
@@ -156,22 +156,5 @@ mod tests {
 
         assert!(!invalid_result.valid);
         assert_eq!(invalid_result.errors.len(), 2);
-    }
-
-    #[test]
-    fn test_backup_info_creation() {
-        let backup = BackupInfo {
-            id: "backup123".to_string(),
-            original_path: "/path/to/original.md".to_string(),
-            backup_path: "/path/to/backup.md".to_string(),
-            timestamp: chrono::Utc::now(),
-            size: 1024,
-            checksum: None,
-        };
-
-        assert_eq!(backup.id, "backup123");
-        assert_eq!(backup.original_path, "/path/to/original.md");
-        assert_eq!(backup.backup_path, "/path/to/backup.md");
-        assert_eq!(backup.size, 1024);
     }
 }

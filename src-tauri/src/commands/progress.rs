@@ -46,7 +46,7 @@ impl ProgressNotifier {
         }
 
         // Broadcast the update
-        if let Err(_) = self.sender.send(progress.clone()) {
+        if self.sender.send(progress.clone()).is_err() {
             // No receivers, which is fine
         }
 

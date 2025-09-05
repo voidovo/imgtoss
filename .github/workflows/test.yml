@@ -81,13 +81,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
 
-      # 暂时屏蔽格式检查，等测试系统完善后再启用
-      # - name: 格式检查
-      #   run: cargo fmt --all --manifest-path src-tauri/Cargo.toml -- --check
+      - name: 格式检查
+        run: cargo fmt --all --manifest-path src-tauri/Cargo.toml -- --check
 
-      # 暂时屏蔽 Clippy 检查，等测试系统完善后再启用
-      # - name: Clippy 检查
-      #   run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
+      - name: Clippy 检查
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
 
       - name: 验证后端环境
         run: |
@@ -96,9 +94,8 @@ jobs:
           echo "✅ 平台: ${{ matrix.platform }}"
           echo "🔄 后端测试已暂时屏蔽，等待测试系统完善"
 
-      # 暂时屏蔽后端测试，等测试系统完善后再启用
-      # - name: 运行后端测试
-      #   run: cargo test --manifest-path src-tauri/Cargo.toml
+      - name: 运行后端测试
+        run: cargo test --manifest-path src-tauri/Cargo.toml
 
   integration-test:
     name: 集成测试

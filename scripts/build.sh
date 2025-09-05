@@ -8,7 +8,7 @@ set -e
 PLATFORM=${1:-"current"}
 VERSION=$(node -p "require('./package.json').version")
 
-echo "🚀 开始构建 ImgToss v$VERSION"
+echo "🚀 开始构建 imgtoss v$VERSION"
 echo "📦 目标平台: $PLATFORM"
 
 # 检查依赖

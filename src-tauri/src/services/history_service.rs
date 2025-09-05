@@ -27,7 +27,6 @@ pub struct HistoryStatistics {
 }
 
 pub struct HistoryService {
-    data_dir: PathBuf,
     upload_history_file: PathBuf,
 }
 
@@ -42,7 +41,6 @@ impl HistoryService {
         let upload_history_file = data_dir.join("upload_history.json");
 
         Ok(Self {
-            data_dir,
             upload_history_file,
         })
     }
@@ -146,6 +144,7 @@ impl HistoryService {
     }
 
     // 根据ID获取单个记录
+    #[allow(dead_code)]
     pub async fn get_upload_record(
         &self,
         id: &str,
@@ -183,7 +182,7 @@ impl HistoryService {
                 let should_keep_by_date = r.timestamp > cutoff;
                 let should_keep_by_mode = upload_mode
                     .as_ref()
-                    .map_or(true, |mode| r.upload_mode != *mode);
+                    .is_none_or(|mode| r.upload_mode != *mode);
                 should_keep_by_date || should_keep_by_mode
             });
         } else if let Some(mode) = upload_mode {

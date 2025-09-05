@@ -1,6 +1,6 @@
 # GitHub Actions 快速设置指南
 
-本指南帮助您快速设置 ImgToss 项目的 GitHub Actions CI/CD 流水线。
+本指南帮助您快速设置 imgtoss 项目的 GitHub Actions CI/CD 流水线。
 
 ## 前置条件
 

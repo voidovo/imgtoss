@@ -1,10 +1,10 @@
 use crate::models::{
-    BatchReplacementResult, ConfigCollection, ConfigItem, ConfigValidation,
-    ErrorSeverity, FileOperation, HealthError, HealthStatus, ImageInfo, LinkReplacement,
-    NotificationConfig, OSSConfig, OSSConnectionTest, ObjectInfo, PaginatedResult,
-    ProgressNotification, ReplacementResult, RollbackResult, SaveOptions, ScanResult, SystemHealth,
-    UploadHistoryRecord, UploadMode, UploadProgress, UploadResult, UploadTaskInfo,
-    UploadTaskManager, UploadTaskStatus, ValidationResult,
+    BatchReplacementResult, ConfigCollection, ConfigItem, ConfigValidation, ErrorSeverity,
+    FileOperation, HealthError, HealthStatus, ImageInfo, LinkReplacement, NotificationConfig,
+    OSSConfig, OSSConnectionTest, ObjectInfo, PaginatedResult, ProgressNotification,
+    ReplacementResult, SaveOptions, ScanResult, SystemHealth, UploadHistoryRecord, UploadMode,
+    UploadProgress, UploadResult, UploadTaskInfo, UploadTaskManager, UploadTaskStatus,
+    ValidationResult,
 };
 use crate::services::history_service::{HistoryQuery, HistoryStatistics};
 use crate::services::{ConfigService, FileService, HistoryService, ImageService, OSSService};
@@ -599,15 +599,13 @@ pub async fn upload_images_with_ids(
                 // Failed uploads are not stored in history
 
                 // Send final progress for failed upload (progress remains as is, but ensure UI gets final state)
-                if let Ok(current_progress) = PROGRESS_NOTIFIER.get_progress(&file_id) {
-                    if let Some(mut progress) = current_progress {
-                        // Mark as completed with error (UI can distinguish by checking results)
-                        progress.progress = 100.0;
-                        let _ = PROGRESS_NOTIFIER.update_progress(file_id.clone(), progress);
+                if let Ok(Some(mut progress)) = PROGRESS_NOTIFIER.get_progress(&file_id) {
+                    // Mark as completed with error (UI can distinguish by checking results)
+                    progress.progress = 100.0;
+                    let _ = PROGRESS_NOTIFIER.update_progress(file_id.clone(), progress);
 
-                        // Small delay to ensure frontend receives the completion event
-                        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                    }
+                    // Small delay to ensure frontend receives the completion event
+                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
                 }
 
                 // Remove progress tracking for failed upload
@@ -868,15 +866,13 @@ pub async fn upload_images(
                 // Failed uploads are not stored in history
 
                 // Send final progress for failed upload (progress remains as is, but ensure UI gets final state)
-                if let Ok(current_progress) = PROGRESS_NOTIFIER.get_progress(&image_id) {
-                    if let Some(mut progress) = current_progress {
-                        // Mark as completed with error (UI can distinguish by checking results)
-                        progress.progress = 100.0;
-                        let _ = PROGRESS_NOTIFIER.update_progress(image_id.clone(), progress);
+                if let Ok(Some(mut progress)) = PROGRESS_NOTIFIER.get_progress(&image_id) {
+                    // Mark as completed with error (UI can distinguish by checking results)
+                    progress.progress = 100.0;
+                    let _ = PROGRESS_NOTIFIER.update_progress(image_id.clone(), progress);
 
-                        // Small delay to ensure frontend receives the completion event
-                        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                    }
+                    // Small delay to ensure frontend receives the completion event
+                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
                 }
 
                 // Remove progress tracking for failed upload
@@ -1650,7 +1646,6 @@ pub async fn replace_markdown_links(replacements: Vec<LinkReplacement>) -> Resul
     Ok(())
 }
 
-
 #[tauri::command]
 pub async fn replace_markdown_links_with_result(
     replacements: Vec<LinkReplacement>,
@@ -1745,7 +1740,6 @@ pub async fn replace_single_file_links(
         .await
         .map_err(|e| e.to_string())
 }
-
 
 // ============================================================================
 // History Commands
@@ -1861,7 +1855,7 @@ pub async fn search_history(
                 || record
                     .source_file
                     .as_ref()
-                    .map_or(false, |f| f.to_lowercase().contains(&term_lower))
+                    .is_some_and(|f| f.to_lowercase().contains(&term_lower))
         });
     }
 
@@ -2172,7 +2166,6 @@ pub async fn clear_image_history(
         .map_err(|e| e.to_string())
 }
 
-
 #[tauri::command]
 pub async fn cleanup_old_history(older_than_days: u32) -> Result<usize, String> {
     if older_than_days == 0 {
@@ -2192,7 +2185,7 @@ pub async fn cleanup_old_history(older_than_days: u32) -> Result<usize, String> 
 }
 
 #[tauri::command]
-pub async fn get_file_operations(limit: Option<usize>) -> Result<Vec<FileOperation>, String> {
+pub async fn get_file_operations(_limit: Option<usize>) -> Result<Vec<FileOperation>, String> {
     // 在简化的设计中，我们不再跟踪文件操作
     // 返回空列表
     Ok(vec![])
