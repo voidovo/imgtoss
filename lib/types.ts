@@ -141,15 +141,6 @@ export interface LinkReplacement {
   new_link: string;
 }
 
-export interface BackupInfo {
-  id: string;
-  original_path: string;
-  backup_path: string;
-  timestamp: string; // DateTime serialized as ISO string
-  size: number;
-  checksum?: string;
-}
-
 export interface FileOperation {
   operation_type: FileOperationType;
   file_path: string;
@@ -159,14 +150,12 @@ export interface FileOperation {
 }
 
 export enum FileOperationType {
-  Backup = "Backup",
   Replace = "Replace",
   Restore = "Restore",
 }
 
 export interface ReplacementResult {
   file_path: string;
-  backup_info: BackupInfo;
   total_replacements: number;
   successful_replacements: number;
   failed_replacements: ReplacementError[];
@@ -185,19 +174,6 @@ export interface BatchReplacementResult {
   total_failed_replacements: number;
   duration: number; // Duration in milliseconds
   timestamp: string; // SystemTime serialized as ISO string
-}
-
-export interface RollbackResult {
-  total_files: number;
-  successful_rollbacks: number;
-  failed_rollbacks: RollbackError[];
-  duration: number; // Duration in milliseconds
-  timestamp: string; // SystemTime serialized as ISO string
-}
-
-export interface RollbackError {
-  backup_info: BackupInfo;
-  error: string;
 }
 
 // ============================================================================

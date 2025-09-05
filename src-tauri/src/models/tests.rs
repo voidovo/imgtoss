@@ -121,8 +121,6 @@ mod tests {
         assert_eq!(replacement.new_link, "https://cdn.example.com/new.png");
     }
 
-
-
     #[test]
     fn test_paginated_result() {
         let items = vec!["item1".to_string(), "item2".to_string()];
@@ -175,31 +173,5 @@ mod tests {
         assert_eq!(backup.original_path, "/path/to/original.md");
         assert_eq!(backup.backup_path, "/path/to/backup.md");
         assert_eq!(backup.size, 1024);
-    }
-
-    #[test]
-    fn test_history_record_creation() {
-        let history = HistoryRecord {
-            id: "hist123".to_string(),
-            timestamp: chrono::Utc::now(),
-            operation: "upload".to_string(),
-            files: vec!["/path/to/file1.md".to_string(), "/path/to/file2.md".to_string()],
-            image_count: 5,
-            success: true,
-            backup_path: Some("/path/to/backup".to_string()),
-            duration: Some(5000), // 5 seconds
-            total_size: Some(2048), // 2KB
-            error_message: None,
-            metadata: std::collections::HashMap::new(),
-        };
-
-        assert_eq!(history.id, "hist123");
-        assert_eq!(history.operation, "upload");
-        assert_eq!(history.files.len(), 2);
-        assert_eq!(history.image_count, 5);
-        assert!(history.success);
-        assert!(history.backup_path.is_some());
-        assert_eq!(history.duration, Some(5000));
-        assert_eq!(history.total_size, Some(2048));
     }
 }

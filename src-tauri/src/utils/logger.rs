@@ -1,15 +1,15 @@
+use crate::utils::{AppError, Result};
+use dirs;
 use std::path::PathBuf;
 use std::sync::Once;
 use tracing::{info, warn};
+use tracing_appender::{non_blocking::WorkerGuard, rolling};
 use tracing_subscriber::{
     fmt::{self, time::UtcTime},
     layer::SubscriberExt,
     util::SubscriberInitExt,
     EnvFilter, Layer,
 };
-use tracing_appender::{non_blocking::WorkerGuard, rolling};
-use dirs;
-use crate::utils::{AppError, Result};
 
 static LOGGER_INIT: Once = Once::new();
 static mut WORKER_GUARD: Option<WorkerGuard> = None;
@@ -40,7 +40,7 @@ impl Default for LogConfig {
             .unwrap_or_else(|| PathBuf::from("."))
             .join("imgtoss")
             .join("logs");
-        
+
         // Different settings for dev vs release
         let (console_output, file_output) = if cfg!(debug_assertions) {
             // Development: only console output with human readable format
@@ -49,9 +49,13 @@ impl Default for LogConfig {
             // Release: only file output with JSON format
             (false, true)
         };
-        
+
         Self {
-            level: if cfg!(debug_assertions) { "debug".to_string() } else { "info".to_string() },
+            level: if cfg!(debug_assertions) {
+                "debug".to_string()
+            } else {
+                "info".to_string()
+            },
             log_dir,
             console_output,
             file_output,
@@ -82,8 +86,7 @@ impl Logger {
 
     fn setup_logging(&self) -> Result<()> {
         // Create log directory if it doesn't exist
-        std::fs::create_dir_all(&self.config.log_dir)
-            .map_err(|e| AppError::IO(e))?;
+        std::fs::create_dir_all(&self.config.log_dir).map_err(|e| AppError::IO(e))?;
 
         // Create env filter for console
         let console_env_filter = EnvFilter::try_from_default_env()
@@ -125,13 +128,20 @@ impl Logger {
         // File output
         if self.config.file_output {
             let file_appender = match self.config.rotation {
-                LogRotation::Never => rolling::never(&self.config.log_dir, &format!("{}.log", self.config.file_prefix)),
-                LogRotation::Hourly => rolling::hourly(&self.config.log_dir, &self.config.file_prefix),
-                LogRotation::Daily => rolling::daily(&self.config.log_dir, &self.config.file_prefix),
+                LogRotation::Never => rolling::never(
+                    &self.config.log_dir,
+                    &format!("{}.log", self.config.file_prefix),
+                ),
+                LogRotation::Hourly => {
+                    rolling::hourly(&self.config.log_dir, &self.config.file_prefix)
+                }
+                LogRotation::Daily => {
+                    rolling::daily(&self.config.log_dir, &self.config.file_prefix)
+                }
             };
 
             let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
-            
+
             // Store the guard to prevent it from being dropped
             unsafe {
                 WORKER_GUARD = Some(guard);
@@ -152,10 +162,12 @@ impl Logger {
         tracing_subscriber::registry()
             .with(layers)
             .try_init()
-            .map_err(|e| AppError::InvalidInput(format!("Failed to initialize tracing subscriber: {}", e)))?;
+            .map_err(|e| {
+                AppError::InvalidInput(format!("Failed to initialize tracing subscriber: {}", e))
+            })?;
 
         info!("Logger initialized with config: {:?}", self.config);
-        
+
         // Clean up old log files if configured
         if let Some(max_files) = self.config.max_files {
             if let Err(e) = self.cleanup_old_logs(max_files) {
@@ -173,20 +185,20 @@ impl Logger {
         let mut log_files: Vec<(PathBuf, SystemTime)> = Vec::new();
 
         // Collect log files
-        for entry in fs::read_dir(&self.config.log_dir)
-            .map_err(|e| AppError::IO(e))? 
-        {
+        for entry in fs::read_dir(&self.config.log_dir).map_err(|e| AppError::IO(e))? {
             let entry = entry.map_err(|e| AppError::IO(e))?;
             let path = entry.path();
-            
-            if path.is_file() && 
-               path.file_name()
-                   .and_then(|name| name.to_str())
-                   .map(|name| name.starts_with(&self.config.file_prefix) && name.ends_with(".log"))
-                   .unwrap_or(false) {
-                
-                let metadata = entry.metadata()
-                    .map_err(|e| AppError::IO(e))?;
+
+            if path.is_file()
+                && path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .map(|name| {
+                        name.starts_with(&self.config.file_prefix) && name.ends_with(".log")
+                    })
+                    .unwrap_or(false)
+            {
+                let metadata = entry.metadata().map_err(|e| AppError::IO(e))?;
                 log_files.push((path, metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH)));
             }
         }
@@ -220,11 +232,11 @@ pub fn init_logger(config: Option<LogConfig>) -> Result<()> {
     let config = config.unwrap_or_default();
     let logger = Logger::new(config);
     logger.init()?;
-    
+
     unsafe {
         LOGGER = Some(logger);
     }
-    
+
     Ok(())
 }
 
@@ -289,10 +301,7 @@ macro_rules! log_timing {
         let start = std::time::Instant::now();
         let result = $block;
         let duration = start.elapsed();
-        tracing::debug!(
-            duration_ms = duration.as_millis(),
-            "Operation completed"
-        );
+        tracing::debug!(duration_ms = duration.as_millis(), "Operation completed");
         result
     }};
     ($block:block, $operation:expr) => {{
@@ -329,7 +338,7 @@ mod tests {
             log_dir: temp_dir.path().to_path_buf(),
             ..LogConfig::default()
         };
-        
+
         let logger = Logger::new(config.clone());
         assert_eq!(logger.get_config().log_dir, config.log_dir);
     }
@@ -342,16 +351,20 @@ mod tests {
             max_files: Some(2),
             ..LogConfig::default()
         };
-        
+
         // Create test log files
-        let log_files = ["imgtoss.2024-01-01.log", "imgtoss.2024-01-02.log", "imgtoss.2024-01-03.log"];
+        let log_files = [
+            "imgtoss.2024-01-01.log",
+            "imgtoss.2024-01-02.log",
+            "imgtoss.2024-01-03.log",
+        ];
         for file in &log_files {
             std::fs::write(temp_dir.path().join(file), "test content").unwrap();
         }
-        
+
         let logger = Logger::new(config);
         assert!(logger.cleanup_old_logs(2).is_ok());
-        
+
         // Check that only 2 files remain
         let remaining_files: Vec<_> = std::fs::read_dir(temp_dir.path())
             .unwrap()
@@ -365,7 +378,7 @@ mod tests {
                 }
             })
             .collect();
-        
+
         assert_eq!(remaining_files.len(), 2);
     }
 }

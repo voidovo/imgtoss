@@ -15,10 +15,8 @@ import type {
   SaveOptions,
   ObjectInfo,
   LinkReplacement,
-  BackupInfo,
   ReplacementResult,
   BatchReplacementResult,
-  RollbackResult,
   UploadHistoryRecord,
   PaginatedResult,
   HistoryStatistics,
@@ -260,48 +258,6 @@ export class TauriAPI {
     return invoke<ReplacementResult>('replace_single_file_links', { filePath, replacements });
   }
 
-  /**
-   * Create a backup of a file before modification
-   */
-  async createBackup(filePath: string): Promise<BackupInfo> {
-    return invoke<BackupInfo>('create_backup', { filePath });
-  }
-
-  /**
-   * Restore a file from backup
-   */
-  async restoreFromBackup(backupId: string): Promise<void> {
-    return invoke<void>('restore_from_backup', { backupId });
-  }
-
-  /**
-   * List all backups, optionally filtered by file path
-   */
-  async listBackups(filePath?: string): Promise<BackupInfo[]> {
-    return invoke<BackupInfo[]>('list_backups', { filePath });
-  }
-
-  /**
-   * Rollback file changes using backup information
-   */
-  async rollbackFileChanges(backupInfos: BackupInfo[]): Promise<RollbackResult> {
-    return invoke<RollbackResult>('rollback_file_changes', { backupInfos });
-  }
-
-  /**
-   * Delete a specific backup
-   */
-  async deleteBackup(backupId: string): Promise<boolean> {
-    return invoke<boolean>('delete_backup', { backupId });
-  }
-
-  /**
-   * Clean up old backups older than specified days
-   */
-  async cleanupOldBackups(olderThanDays: number): Promise<number> {
-    return invoke<number>('cleanup_old_backups', { olderThanDays });
-  }
-
   // ============================================================================
   // History Operations
   // ============================================================================
@@ -374,7 +330,6 @@ export class TauriAPI {
     files: string[],
     imageCount: number,
     success: boolean,
-    backupPath?: string,
     duration?: number,
     totalSize?: number,
     errorMessage?: string
@@ -384,7 +339,6 @@ export class TauriAPI {
       files,
       imageCount,
       success,
-      backupPath,
       duration,
       totalSize,
       errorMessage,
@@ -651,11 +605,10 @@ export const historyOperations = {
     files: string[],
     imageCount: number,
     success: boolean,
-    backupPath?: string,
     duration?: number,
     totalSize?: number,
     errorMessage?: string
-  ) => tauriAPI.addHistoryRecord(operation, files, imageCount, success, backupPath, duration, totalSize, errorMessage),
+  ) => tauriAPI.addHistoryRecord(operation, files, imageCount, success, duration, totalSize, errorMessage),
   getHistoryStatistics: () => tauriAPI.getHistoryStatistics(),
 };
 

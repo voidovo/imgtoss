@@ -1,22 +1,19 @@
 use crate::models::{
-    BackupInfo, BatchReplacementResult, ConfigValidation, ErrorSeverity, HealthError, HealthStatus,
-    ImageInfo, LinkReplacement, NotificationConfig, OSSConfig, OSSConnectionTest,
-    ObjectInfo, PaginatedResult, ProgressNotification, ReplacementResult, RollbackResult,
-    ScanResult, SystemHealth, UploadProgress, UploadResult, UploadTaskInfo, UploadTaskManager,
-    UploadTaskStatus, ValidationResult, SaveOptions, UploadHistoryRecord, UploadMode,
-    ConfigItem, ConfigCollection, FileOperation,
+    BatchReplacementResult, ConfigCollection, ConfigItem, ConfigValidation,
+    ErrorSeverity, FileOperation, HealthError, HealthStatus, ImageInfo, LinkReplacement,
+    NotificationConfig, OSSConfig, OSSConnectionTest, ObjectInfo, PaginatedResult,
+    ProgressNotification, ReplacementResult, RollbackResult, SaveOptions, ScanResult, SystemHealth,
+    UploadHistoryRecord, UploadMode, UploadProgress, UploadResult, UploadTaskInfo,
+    UploadTaskManager, UploadTaskStatus, ValidationResult,
 };
-use crate::services::history_service::{
-    HistoryQuery, HistoryStatistics,
-};
+use crate::services::history_service::{HistoryQuery, HistoryStatistics};
 use crate::services::{ConfigService, FileService, HistoryService, ImageService, OSSService};
 use crate::utils::error::AppError;
-use crate::{log_debug, log_info, log_error};
+use crate::{log_debug, log_error, log_info};
 use std::collections::HashMap;
 use std::path::Path;
 
 pub mod progress;
-mod debug_tencent_cos;
 
 use progress::PROGRESS_NOTIFIER;
 use std::sync::{Arc, Mutex};
@@ -255,8 +252,12 @@ pub fn validate_uuid(uuid: &str) -> Result<(), AppError> {
         return Err(AppError::Validation("Invalid UUID format".to_string()));
     }
 
-    if parts[0].len() != 8 || parts[1].len() != 4 || parts[2].len() != 4 
-        || parts[3].len() != 4 || parts[4].len() != 12 {
+    if parts[0].len() != 8
+        || parts[1].len() != 4
+        || parts[2].len() != 4
+        || parts[3].len() != 4
+        || parts[4].len() != 12
+    {
         return Err(AppError::Validation("Invalid UUID format".to_string()));
     }
 
@@ -387,7 +388,10 @@ pub async fn upload_images_with_ids(
 
     for (file_id, image_path) in &image_data {
         // Validate file ID format (should be UUID)
-        if file_id.is_empty() || file_id.len() != 36 || file_id.chars().filter(|&c| c == '-').count() != 4 {
+        if file_id.is_empty()
+            || file_id.len() != 36
+            || file_id.chars().filter(|&c| c == '-').count() != 4
+        {
             log_error!(
                 operation = "upload_images_with_ids_command",
                 file_id = %file_id,
@@ -485,12 +489,12 @@ pub async fn upload_images_with_ids(
         );
         e.to_string()
     })?;
-    
+
     log_debug!(
         operation = "upload_images_with_ids_command",
         "OSS service created successfully"
     );
-    
+
     let image_service = ImageService::new();
 
     let mut results = Vec::new();
@@ -529,7 +533,7 @@ pub async fn upload_images_with_ids(
                     checksum = %checksum,
                     "Image uploaded successfully"
                 );
-                
+
                 results.push(UploadResult {
                     image_id: file_id.clone(),
                     success: true,
@@ -568,10 +572,10 @@ pub async fn upload_images_with_ids(
                     speed: None,
                 };
                 let _ = PROGRESS_NOTIFIER.update_progress(file_id.clone(), final_progress);
-                
+
                 // Small delay to ensure frontend receives the completion event
                 tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                
+
                 // Remove progress tracking for completed upload
                 let _ = PROGRESS_NOTIFIER.remove_progress(&file_id);
             }
@@ -583,7 +587,7 @@ pub async fn upload_images_with_ids(
                     error = %e,
                     "Image upload failed"
                 );
-                
+
                 results.push(UploadResult {
                     image_id: file_id.clone(),
                     success: false,
@@ -600,12 +604,12 @@ pub async fn upload_images_with_ids(
                         // Mark as completed with error (UI can distinguish by checking results)
                         progress.progress = 100.0;
                         let _ = PROGRESS_NOTIFIER.update_progress(file_id.clone(), progress);
-                        
+
                         // Small delay to ensure frontend receives the completion event
                         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
                     }
                 }
-                
+
                 // Remove progress tracking for failed upload
                 let _ = PROGRESS_NOTIFIER.remove_progress(&file_id);
             }
@@ -628,7 +632,6 @@ pub async fn upload_images(
     image_paths: Vec<String>,
     config: OSSConfig,
 ) -> Result<Vec<UploadResult>, String> {
-
     // Rate limiting
     UPLOAD_RATE_LIMITER
         .check_rate_limit("upload_images")
@@ -669,7 +672,7 @@ pub async fn upload_images(
             path = %path,
             "Validating image path"
         );
-        
+
         if path.is_empty() {
             log_error!(
                 operation = "upload_images_command",
@@ -753,12 +756,12 @@ pub async fn upload_images(
         );
         e.to_string()
     })?;
-    
+
     log_debug!(
         operation = "upload_images_command",
         "OSS service created successfully"
     );
-    
+
     let image_service = ImageService::new();
 
     let mut results = Vec::new();
@@ -799,7 +802,7 @@ pub async fn upload_images(
                     checksum = %checksum,
                     "Image uploaded successfully"
                 );
-                
+
                 results.push(UploadResult {
                     image_id: image_id.clone(),
                     success: true,
@@ -838,10 +841,10 @@ pub async fn upload_images(
                     speed: None,
                 };
                 let _ = PROGRESS_NOTIFIER.update_progress(image_id.clone(), final_progress);
-                
+
                 // Small delay to ensure frontend receives the completion event
                 tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                
+
                 // Remove progress tracking for completed upload
                 let _ = PROGRESS_NOTIFIER.remove_progress(&image_id);
             }
@@ -853,7 +856,7 @@ pub async fn upload_images(
                     error = %e,
                     "Image upload failed"
                 );
-                
+
                 results.push(UploadResult {
                     image_id: image_id.clone(),
                     success: false,
@@ -870,12 +873,12 @@ pub async fn upload_images(
                         // Mark as completed with error (UI can distinguish by checking results)
                         progress.progress = 100.0;
                         let _ = PROGRESS_NOTIFIER.update_progress(image_id.clone(), progress);
-                        
+
                         // Small delay to ensure frontend receives the completion event
                         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
                     }
                 }
-                
+
                 // Remove progress tracking for failed upload
                 let _ = PROGRESS_NOTIFIER.remove_progress(&image_id);
             }
@@ -928,17 +931,16 @@ async fn upload_single_image(
         image_path = %image_path,
         "Reading image file data"
     );
-    let image_data = fs::read(image_path)
-        .map_err(|e| {
-            log_error!(
-                operation = "upload_single_image",
-                image_path = %image_path,
-                error = %e,
-                "Failed to read image file"
-            );
-            AppError::FileSystem(format!("Failed to read image file: {}", e))
-        })?;
-    
+    let image_data = fs::read(image_path).map_err(|e| {
+        log_error!(
+            operation = "upload_single_image",
+            image_path = %image_path,
+            error = %e,
+            "Failed to read image file"
+        );
+        AppError::FileSystem(format!("Failed to read image file: {}", e))
+    })?;
+
     log_debug!(
         image_size = image_data.len(),
         "Image file read successfully"
@@ -959,7 +961,7 @@ async fn upload_single_image(
 
     let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S").to_string();
     let key = format!("images/{}_{}", timestamp, file_name);
-    
+
     log_info!(
         operation = "upload_single_image",
         image_path = %image_path,
@@ -1169,7 +1171,9 @@ pub async fn upload_images_batch(
                                 uploaded_url: url.clone(),
                                 upload_mode: UploadMode::ImageUpload,
                                 source_file: None,
-                                file_size: std::fs::metadata(&image_path_clone).map(|m| m.len()).unwrap_or(0),
+                                file_size: std::fs::metadata(&image_path_clone)
+                                    .map(|m| m.len())
+                                    .unwrap_or(0),
                                 checksum,
                             };
 
@@ -1246,7 +1250,10 @@ pub async fn generate_uuid() -> Result<String, String> {
 // ============================================================================
 
 #[tauri::command]
-pub async fn save_oss_config(config: OSSConfig, options: Option<SaveOptions>) -> Result<(), String> {
+pub async fn save_oss_config(
+    config: OSSConfig,
+    options: Option<SaveOptions>,
+) -> Result<(), String> {
     // Rate limiting
     CONFIG_RATE_LIMITER
         .check_rate_limit("save_config")
@@ -1256,15 +1263,15 @@ pub async fn save_oss_config(config: OSSConfig, options: Option<SaveOptions>) ->
     validate_oss_config_params(&config).map_err(|e| e.to_string())?;
 
     let config_service = ConfigService::new().map_err(|e| e.to_string())?;
-    
-        // Clear cache if force revalidation is requested
+
+    // Clear cache if force revalidation is requested
     if let Some(opts) = &options {
         if opts.force_revalidate {
             println!("🔄 Force revalidation requested, clearing cache for configuration");
             config_service.clear_config_cache(&config);
         }
     }
-    
+
     config_service
         .save_config(&config)
         .await
@@ -1274,7 +1281,7 @@ pub async fn save_oss_config(config: OSSConfig, options: Option<SaveOptions>) ->
 #[tauri::command]
 pub async fn load_oss_config() -> Result<Option<OSSConfig>, String> {
     let config_service = ConfigService::new().map_err(|e| e.to_string())?;
-    
+
     config_service
         .load_config()
         .await
@@ -1289,8 +1296,11 @@ pub async fn test_oss_connection(config: OSSConfig) -> Result<OSSConnectionTest,
     println!("   Endpoint: {}", config.endpoint);
     println!("   Bucket: {}", config.bucket);
     println!("   Region: {}", config.region);
-    println!("   Access Key ID: {}***", &config.access_key_id[..config.access_key_id.len().min(8)]);
-    
+    println!(
+        "   Access Key ID: {}***",
+        &config.access_key_id[..config.access_key_id.len().min(8)]
+    );
+
     // Validate input parameters
     println!("✅ Validating configuration parameters...");
     if let Err(e) = validate_oss_config_params(&config) {
@@ -1304,7 +1314,7 @@ pub async fn test_oss_connection(config: OSSConfig) -> Result<OSSConnectionTest,
         Ok(service) => {
             println!("✅ OSS service created successfully");
             service
-        },
+        }
         Err(e) => {
             println!("❌ Failed to create OSS service: {}", e);
             return Err(e.to_string());
@@ -1324,7 +1334,7 @@ pub async fn test_oss_connection(config: OSSConfig) -> Result<OSSConnectionTest,
                 println!("   Error: {}", error);
             }
             Ok(result)
-        },
+        }
         Err(e) => {
             println!("❌ Connection test failed with error: {}", e);
             Err(e.to_string())
@@ -1345,7 +1355,9 @@ pub async fn validate_oss_config(config: OSSConfig) -> Result<ConfigValidation, 
 }
 
 #[tauri::command]
-pub async fn get_cached_connection_status(config: OSSConfig) -> Result<Option<OSSConnectionTest>, String> {
+pub async fn get_cached_connection_status(
+    config: OSSConfig,
+) -> Result<Option<OSSConnectionTest>, String> {
     // Basic parameter validation first
     validate_oss_config_params(&config).map_err(|e| e.to_string())?;
 
@@ -1381,7 +1393,7 @@ pub async fn list_oss_objects(
 #[tauri::command]
 pub async fn export_oss_config() -> Result<String, String> {
     let config_service = ConfigService::new().map_err(|e| e.to_string())?;
-    
+
     let config = config_service
         .load_config()
         .await
@@ -1426,7 +1438,7 @@ pub async fn import_oss_config(config_json: String) -> Result<(), String> {
 
     // Save the imported config
     let config_service = ConfigService::new().map_err(|e| e.to_string())?;
-    
+
     config_service
         .save_config(&config)
         .await
@@ -1557,7 +1569,7 @@ pub async fn replace_markdown_links(replacements: Vec<LinkReplacement>) -> Resul
 
         if replacement.old_link.is_empty() {
             log_error!(
-                operation = "replace_markdown_links_command", 
+                operation = "replace_markdown_links_command",
                 replacement_index = index,
                 error = "Old link cannot be empty in replacement",
                 "Validation failed"
@@ -1569,7 +1581,7 @@ pub async fn replace_markdown_links(replacements: Vec<LinkReplacement>) -> Resul
             log_error!(
                 operation = "replace_markdown_links_command",
                 replacement_index = index,
-                error = "New link cannot be empty in replacement", 
+                error = "New link cannot be empty in replacement",
                 "Validation failed"
             );
             return Err("New link cannot be empty in replacement".to_string());
@@ -1614,7 +1626,7 @@ pub async fn replace_markdown_links(replacements: Vec<LinkReplacement>) -> Resul
         );
         e.to_string()
     })?;
-    
+
     let result = file_service
         .replace_image_links_batch(replacements)
         .await
@@ -1626,7 +1638,7 @@ pub async fn replace_markdown_links(replacements: Vec<LinkReplacement>) -> Resul
             );
             e.to_string()
         })?;
-    
+
     log_info!(
         operation = "replace_markdown_links_command",
         successful_replacements = result.total_successful_replacements,
@@ -1638,25 +1650,6 @@ pub async fn replace_markdown_links(replacements: Vec<LinkReplacement>) -> Resul
     Ok(())
 }
 
-#[tauri::command]
-pub async fn create_backup(file_path: String) -> Result<BackupInfo, String> {
-    // 在简化的设计中，我们不再支持备份功能
-    // 返回一个错误提示用户该功能已被移除
-    Err("Backup functionality has been removed in the simplified design".to_string())
-}
-
-#[tauri::command]
-pub async fn restore_from_backup(backup_id: String) -> Result<(), String> {
-    // 在简化的设计中，我们不再支持备份功能
-    Err("Backup functionality has been removed in the simplified design".to_string())
-}
-
-#[tauri::command]
-pub async fn list_backups(file_path: Option<String>) -> Result<Vec<BackupInfo>, String> {
-    // 在简化的设计中，我们不再支持备份功能
-    // 返回空列表
-    Ok(vec![])
-}
 
 #[tauri::command]
 pub async fn replace_markdown_links_with_result(
@@ -1753,53 +1746,6 @@ pub async fn replace_single_file_links(
         .map_err(|e| e.to_string())
 }
 
-#[tauri::command]
-pub async fn rollback_file_changes(
-    backup_infos: Vec<BackupInfo>,
-) -> Result<RollbackResult, String> {
-    // Validate input parameters
-    if backup_infos.is_empty() {
-        return Err("Backup infos cannot be empty".to_string());
-    }
-
-    if backup_infos.len() > 50 {
-        return Err("Too many backups to rollback (max 50)".to_string());
-    }
-
-    // Validate each backup info
-    for backup_info in &backup_infos {
-        if backup_info.backup_path.is_empty() {
-            return Err("Backup path cannot be empty".to_string());
-        }
-
-        if backup_info.original_path.is_empty() {
-            return Err("Original path cannot be empty".to_string());
-        }
-
-        // Security check: prevent path traversal
-        if backup_info.backup_path.contains("..") || backup_info.backup_path.contains("~") {
-            return Err("Invalid backup path detected".to_string());
-        }
-
-        if backup_info.original_path.contains("..") || backup_info.original_path.contains("~") {
-            return Err("Invalid original path detected".to_string());
-        }
-
-        let backup_path = Path::new(&backup_info.backup_path);
-        if !backup_path.exists() {
-            return Err(format!(
-                "Backup file not found: {}",
-                backup_info.backup_path
-            ));
-        }
-    }
-
-    let file_service = FileService::new().map_err(|e| e.to_string())?;
-    file_service
-        .rollback_replacements(backup_infos)
-        .await
-        .map_err(|e| e.to_string())
-}
 
 // ============================================================================
 // History Commands
@@ -1912,7 +1858,10 @@ pub async fn search_history(
         service_records.retain(|record| {
             record.image_name.to_lowercase().contains(&term_lower)
                 || record.uploaded_url.to_lowercase().contains(&term_lower)
-                || record.source_file.as_ref().map_or(false, |f| f.to_lowercase().contains(&term_lower))
+                || record
+                    .source_file
+                    .as_ref()
+                    .map_or(false, |f| f.to_lowercase().contains(&term_lower))
         });
     }
 
@@ -1968,7 +1917,7 @@ pub async fn add_upload_history_record(
     if image_name.is_empty() {
         return Err("Image name cannot be empty".to_string());
     }
-    
+
     if uploaded_url.is_empty() {
         return Err("Uploaded URL cannot be empty".to_string());
     }
@@ -2050,7 +1999,7 @@ pub async fn get_upload_history_records(
     offset: Option<usize>,
 ) -> Result<Vec<UploadHistoryRecord>, String> {
     let history_service = HistoryService::new().map_err(|e| e.to_string())?;
-    
+
     let upload_mode_enum = if let Some(mode) = upload_mode {
         match mode.as_str() {
             "ImageUpload" => Some(UploadMode::ImageUpload),
@@ -2062,17 +2011,21 @@ pub async fn get_upload_history_records(
     };
 
     let start_date_parsed = if let Some(date_str) = start_date {
-        Some(chrono::DateTime::parse_from_rfc3339(&date_str)
-            .map_err(|_| "Invalid start date format")?
-            .with_timezone(&chrono::Utc))
+        Some(
+            chrono::DateTime::parse_from_rfc3339(&date_str)
+                .map_err(|_| "Invalid start date format")?
+                .with_timezone(&chrono::Utc),
+        )
     } else {
         None
     };
 
     let end_date_parsed = if let Some(date_str) = end_date {
-        Some(chrono::DateTime::parse_from_rfc3339(&date_str)
-            .map_err(|_| "Invalid end date format")?
-            .with_timezone(&chrono::Utc))
+        Some(
+            chrono::DateTime::parse_from_rfc3339(&date_str)
+                .map_err(|_| "Invalid end date format")?
+                .with_timezone(&chrono::Utc),
+        )
     } else {
         None
     };
@@ -2093,7 +2046,9 @@ pub async fn get_upload_history_records(
 
 // 根据checksum查找重复记录
 #[tauri::command]
-pub async fn find_duplicate_by_checksum(checksum: String) -> Result<Option<UploadHistoryRecord>, String> {
+pub async fn find_duplicate_by_checksum(
+    checksum: String,
+) -> Result<Option<UploadHistoryRecord>, String> {
     if checksum.is_empty() {
         return Err("Checksum cannot be empty".to_string());
     }
@@ -2145,7 +2100,7 @@ pub async fn clear_upload_history(
 #[tauri::command]
 pub async fn get_image_history(
     upload_mode: Option<String>,
-    limit: Option<usize>
+    limit: Option<usize>,
 ) -> Result<Vec<UploadHistoryRecord>, String> {
     // 验证限制
     if let Some(limit_val) = limit {
@@ -2166,7 +2121,7 @@ pub async fn get_image_history(
     };
 
     let history_service = HistoryService::new().map_err(|e| e.to_string())?;
-    
+
     let query = HistoryQuery {
         upload_mode: upload_mode_enum,
         start_date: None,
@@ -2174,7 +2129,7 @@ pub async fn get_image_history(
         limit,
         offset: None,
     };
-    
+
     history_service
         .get_upload_records(Some(query))
         .await
@@ -2197,7 +2152,7 @@ pub async fn delete_image_history_record(id: String) -> Result<bool, String> {
 #[tauri::command]
 pub async fn clear_image_history(
     upload_mode: Option<String>,
-    older_than_days: Option<u32>
+    older_than_days: Option<u32>,
 ) -> Result<usize, String> {
     // 解析上传模式
     let upload_mode_enum = if let Some(mode) = upload_mode {
@@ -2217,18 +2172,6 @@ pub async fn clear_image_history(
         .map_err(|e| e.to_string())
 }
 
-#[tauri::command]
-pub async fn delete_backup(backup_id: String) -> Result<bool, String> {
-    // 在简化的设计中，我们不再支持备份功能
-    Err("Backup functionality has been removed in the simplified design".to_string())
-}
-
-#[tauri::command]
-pub async fn cleanup_old_backups(older_than_days: u32) -> Result<usize, String> {
-    // 在简化的设计中，我们不再支持备份功能
-    // 返回0表示没有清理任何备份
-    Ok(0)
-}
 
 #[tauri::command]
 pub async fn cleanup_old_history(older_than_days: u32) -> Result<usize, String> {
@@ -2889,26 +2832,4 @@ fn get_available_disk_space() -> Result<u64, String> {
     // In a real implementation, this would use system APIs
     // For now, return a placeholder value
     Ok(10_000_000_000) // 10GB
-}
-
-// ============================================================================
-// Debug Commands
-// ============================================================================
-
-#[tauri::command]
-pub async fn debug_tencent_cos_connection(config: OSSConfig) -> Result<String, String> {
-    println!("🚀 启动腾讯云 COS 连接调试...");
-    
-    match debug_tencent_cos::debug_tencent_cos_connection(&config).await {
-        Ok(_) => {
-            let success_msg = "✅ 腾讯云 COS 连接调试完成，所有测试通过";
-            println!("{}", success_msg);
-            Ok(success_msg.to_string())
-        }
-        Err(e) => {
-            let error_msg = format!("❌ 腾讯云 COS 连接调试失败: {}", e);
-            println!("{}", error_msg);
-            Err(error_msg)
-        }
-    }
 }

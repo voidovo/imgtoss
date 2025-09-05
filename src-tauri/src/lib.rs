@@ -13,10 +13,13 @@ pub fn run() {
         eprintln!("Failed to initialize logger: {}", e);
     }
     tauri::Builder::default()
-        .plugin(tauri_plugin_stronghold::Builder::new(|_| {
-            // 使用固定的应用密码，通过 Argon2 进行哈希处理
-            b"imgtoss-secret-key-2024".to_vec()
-        }).build())
+        .plugin(
+            tauri_plugin_stronghold::Builder::new(|_| {
+                // 使用固定的应用密码，通过 Argon2 进行哈希处理
+                b"imgtoss-secret-key-2024".to_vec()
+            })
+            .build(),
+        )
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -52,10 +55,6 @@ pub fn run() {
             replace_markdown_links,
             replace_markdown_links_with_result,
             replace_single_file_links,
-            rollback_file_changes,
-            create_backup,
-            restore_from_backup,
-            list_backups,
             // History Commands
             get_upload_history,
             search_history,
@@ -73,8 +72,6 @@ pub fn run() {
             get_image_history,
             delete_image_history_record,
             clear_image_history,
-            delete_backup,
-            cleanup_old_backups,
             cleanup_old_history,
             get_file_operations,
             // Progress Monitoring Commands
@@ -103,8 +100,6 @@ pub fn run() {
             retry_upload_task,
             get_upload_task_status,
             get_all_upload_tasks,
-            // Debug Commands
-            debug_tencent_cos_connection
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

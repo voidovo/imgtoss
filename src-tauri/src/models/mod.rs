@@ -110,8 +110,8 @@ pub struct ConfigItem {
     pub name: String,
     pub config: OSSConfig,
     pub is_active: bool,
-    pub created_at: String,  // ISO 8601 string instead of SystemTime
-    pub updated_at: String,  // ISO 8601 string instead of SystemTime
+    pub created_at: String, // ISO 8601 string instead of SystemTime
+    pub updated_at: String, // ISO 8601 string instead of SystemTime
 }
 
 // New: Collection of configurations
@@ -133,8 +133,8 @@ pub enum OSSProvider {
 pub struct OSSConnectionTest {
     pub success: bool,
     pub error: Option<String>,
-    pub latency: Option<u64>, // milliseconds
-    pub bucket_exists: Option<bool>, // Whether the specified bucket exists
+    pub latency: Option<u64>,                   // milliseconds
+    pub bucket_exists: Option<bool>,            // Whether the specified bucket exists
     pub available_buckets: Option<Vec<String>>, // List of available buckets (if accessible)
 }
 
@@ -160,15 +160,6 @@ pub struct LinkReplacement {
     pub new_link: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BackupInfo {
-    pub id: String,
-    pub original_path: String,
-    pub backup_path: String,
-    pub timestamp: chrono::DateTime<chrono::Utc>,
-    pub size: u64,
-    pub checksum: Option<String>,
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileOperation {
@@ -181,7 +172,6 @@ pub struct FileOperation {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum FileOperationType {
-    Backup,
     Replace,
     Restore,
 }
@@ -189,7 +179,6 @@ pub enum FileOperationType {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReplacementResult {
     pub file_path: String,
-    pub backup_info: BackupInfo,
     pub total_replacements: usize,
     pub successful_replacements: usize,
     pub failed_replacements: Vec<ReplacementError>,
@@ -223,7 +212,7 @@ pub struct RollbackResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RollbackError {
-    pub backup_info: BackupInfo,
+    pub file_path: String,
     pub error: String,
 }
 
@@ -259,8 +248,6 @@ pub struct AppState {
     pub is_scanning: bool,
     pub is_uploading: bool,
 }
-
-
 
 // ============================================================================
 // Utility Models
@@ -355,9 +342,9 @@ impl ImageReference {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SystemHealth {
     pub status: HealthStatus,
-    pub uptime: u64, // seconds
+    pub uptime: u64,       // seconds
     pub memory_usage: u64, // bytes
-    pub disk_space: u64, // bytes available
+    pub disk_space: u64,   // bytes available
     pub active_uploads: u32,
     pub last_check: chrono::DateTime<chrono::Utc>,
     pub errors: Vec<HealthError>,

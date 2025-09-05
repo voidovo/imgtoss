@@ -1,9 +1,9 @@
-use crate::models::{OSSConfig, ConfigValidation, OSSConnectionTest, ConfigItem, ConfigCollection};
-use crate::utils::{Result, AppError};
+use crate::models::{ConfigCollection, ConfigItem, ConfigValidation, OSSConfig, OSSConnectionTest};
 use crate::services::oss_service::OSSService;
+use crate::utils::{AppError, Result};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
-use sha2::{Sha256, Digest};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -36,9 +36,8 @@ impl CachedTestResult {
 }
 
 // Global cache for connection test results
-static CONNECTION_TEST_CACHE: Lazy<Mutex<HashMap<String, CachedTestResult>>> = 
+static CONNECTION_TEST_CACHE: Lazy<Mutex<HashMap<String, CachedTestResult>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
-
 
 pub struct ConfigService {
     config_dir: PathBuf,
@@ -47,29 +46,27 @@ pub struct ConfigService {
 impl ConfigService {
     pub fn new() -> Result<Self> {
         let config_dir = Self::get_config_dir()?;
-        
+
         // Ensure config directory exists
         if !config_dir.exists() {
-            std::fs::create_dir_all(&config_dir)
-                .map_err(|e| AppError::Configuration(format!("Failed to create config directory: {}", e)))?;
+            std::fs::create_dir_all(&config_dir).map_err(|e| {
+                AppError::Configuration(format!("Failed to create config directory: {}", e))
+            })?;
         }
 
-        Ok(Self {
-            config_dir,
-        })
+        Ok(Self { config_dir })
     }
 
     #[allow(dead_code)]
     pub fn new_with_dir(config_dir: PathBuf) -> Result<Self> {
         // Ensure config directory exists
         if !config_dir.exists() {
-            std::fs::create_dir_all(&config_dir)
-                .map_err(|e| AppError::Configuration(format!("Failed to create config directory: {}", e)))?;
+            std::fs::create_dir_all(&config_dir).map_err(|e| {
+                AppError::Configuration(format!("Failed to create config directory: {}", e))
+            })?;
         }
 
-        Ok(Self {
-            config_dir,
-        })
+        Ok(Self { config_dir })
     }
 
     pub async fn save_config(&self, config: &OSSConfig) -> Result<()> {
@@ -99,10 +96,10 @@ impl ConfigService {
         if let Some(active_config) = self.get_active_config().await? {
             return Ok(Some(active_config.config));
         }
-        
+
         // Fallback to legacy single config file for compatibility
         let config_path = self.get_config_file_path();
-        
+
         if !config_path.exists() {
             return Ok(None);
         }
@@ -125,7 +122,7 @@ impl ConfigService {
     /// Only includes core connection parameters that affect actual connectivity
     fn calculate_config_hash(&self, config: &OSSConfig) -> String {
         let mut hasher = Sha256::new();
-        
+
         // Include all core connection parameters that affect connection behavior
         // Provider is crucial for cache isolation between different providers
         hasher.update((config.provider.clone() as u8).to_string());
@@ -139,30 +136,33 @@ impl ConfigService {
         hasher.update(&config.bucket);
         hasher.update("|");
         hasher.update(&config.region);
-        
+
         // Note: Business configuration parameters are excluded:
         // - path_template: doesn't affect connection testing
-        // - cdn_domain: doesn't affect connection testing  
+        // - cdn_domain: doesn't affect connection testing
         // - compression_*: doesn't affect connection testing
-        
+
         format!("{:x}", hasher.finalize())
     }
 
     /// Load cache from file system
     fn load_cache_from_file(&self) -> HashMap<String, CachedTestResult> {
         let cache_path = self.get_cache_file_path();
-        
+
         if !cache_path.exists() {
             return HashMap::new();
         }
-        
+
         match std::fs::read_to_string(&cache_path) {
             Ok(content) => {
                 match serde_json::from_str::<HashMap<String, CachedTestResult>>(&content) {
                     Ok(mut cache) => {
                         // Remove expired entries
                         cache.retain(|_, cached| !cached.is_expired());
-                        println!("📂 Loaded {} cached connection results from file", cache.len());
+                        println!(
+                            "📂 Loaded {} cached connection results from file",
+                            cache.len()
+                        );
                         cache
                     }
                     Err(e) => {
@@ -181,13 +181,16 @@ impl ConfigService {
     /// Save cache to file system
     fn save_cache_to_file(&self, cache: &HashMap<String, CachedTestResult>) {
         let cache_path = self.get_cache_file_path();
-        
+
         match serde_json::to_string_pretty(cache) {
             Ok(content) => {
                 if let Err(e) = std::fs::write(&cache_path, content) {
                     println!("⚠️ Failed to save cache to file: {}", e);
                 } else {
-                    println!("💾 Saved {} connection test results to cache file", cache.len());
+                    println!(
+                        "💾 Saved {} connection test results to cache file",
+                        cache.len()
+                    );
                 }
             }
             Err(e) => {
@@ -212,14 +215,17 @@ impl ConfigService {
     fn get_cached_test_result(&self, config_hash: &str) -> Option<OSSConnectionTest> {
         // Ensure cache is loaded from file
         self.ensure_cache_loaded();
-        
+
         let cache = CONNECTION_TEST_CACHE.lock().ok()?;
         let cached_result = cache.get(config_hash)?;
-        
+
         if cached_result.is_expired() {
             None
         } else {
-            println!("✅ Using cached connection test result for config hash: {}...", &config_hash[..8]);
+            println!(
+                "✅ Using cached connection test result for config hash: {}...",
+                &config_hash[..8]
+            );
             Some(cached_result.result.clone())
         }
     }
@@ -233,10 +239,10 @@ impl ConfigService {
                 timestamp: SystemTime::now(),
             };
             cache.insert(config_hash, cached_result);
-            
+
             // Clean expired entries periodically
             cache.retain(|_, cached| !cached.is_expired());
-            
+
             // Save to file after updating cache
             self.save_cache_to_file(&cache);
         }
@@ -248,7 +254,7 @@ impl ConfigService {
         if let Ok(mut cache) = CONNECTION_TEST_CACHE.lock() {
             cache.remove(&config_hash);
             println!("🗑️ Cleared cache for config hash: {}...", &config_hash[..8]);
-            
+
             // Save to file after clearing cache
             self.save_cache_to_file(&cache);
         }
@@ -260,20 +266,26 @@ impl ConfigService {
             let count = cache.len();
             cache.clear();
             println!("🗑️ Cleared all {} cached connection results", count);
-            
+
             // Save to file after clearing all cache
             self.save_cache_to_file(&cache);
         }
     }
 
     /// Get cached connection test result for a specific configuration without performing a new test
-    pub async fn get_cached_connection_status(&self, config: &OSSConfig) -> Option<OSSConnectionTest> {
+    pub async fn get_cached_connection_status(
+        &self,
+        config: &OSSConfig,
+    ) -> Option<OSSConnectionTest> {
         let config_hash = self.calculate_config_hash(config);
         self.get_cached_test_result(&config_hash)
     }
     /// Perform actual connection test using OSSService
     async fn perform_connection_test(&self, config: &OSSConfig) -> Result<OSSConnectionTest> {
-        println!("🔄 Performing actual connection test for provider: {:?}", config.provider);
+        println!(
+            "🔄 Performing actual connection test for provider: {:?}",
+            config.provider
+        );
         let oss_service = OSSService::new(config.clone())?;
         oss_service.test_connection().await
     }
@@ -281,18 +293,18 @@ impl ConfigService {
     /// Smart connection test with caching
     async fn smart_connection_test(&self, config: &OSSConfig) -> Result<OSSConnectionTest> {
         let config_hash = self.calculate_config_hash(config);
-        
+
         // Check cache first
         if let Some(cached_result) = self.get_cached_test_result(&config_hash) {
             return Ok(cached_result);
         }
-        
+
         // Perform actual test
         let test_result = self.perform_connection_test(config).await?;
-        
+
         // Cache the result
         self.cache_test_result(config_hash, test_result.clone());
-        
+
         Ok(test_result)
     }
 
@@ -332,7 +344,8 @@ impl ConfigService {
 
         // Validate endpoint URL format
         if !config.endpoint.starts_with("http://") && !config.endpoint.starts_with("https://") {
-            errors.push("Endpoint must be a valid URL starting with http:// or https://".to_string());
+            errors
+                .push("Endpoint must be a valid URL starting with http:// or https://".to_string());
         }
 
         // Smart connection test with caching (only if basic validation passes)
@@ -370,7 +383,7 @@ impl ConfigService {
     /// Load all configurations
     pub async fn load_all_configs(&self) -> Result<ConfigCollection> {
         let configs_path = self.get_configs_file_path();
-        
+
         if !configs_path.exists() {
             // Return empty collection if no configs exist
             return Ok(ConfigCollection {
@@ -428,14 +441,17 @@ impl ConfigService {
     /// Set active configuration
     pub async fn set_active_config(&self, config_id: String) -> Result<()> {
         let mut collection = self.load_all_configs().await?;
-        
+
         // Check if config exists
         if !collection.configs.iter().any(|c| c.id == config_id) {
-            return Err(AppError::Configuration(format!("Config with ID {} not found", config_id)));
+            return Err(AppError::Configuration(format!(
+                "Config with ID {} not found",
+                config_id
+            )));
         }
 
         collection.active_config_id = Some(config_id.clone());
-        
+
         // Update is_active flags
         for config in &mut collection.configs {
             config.is_active = config.id == config_id;
@@ -447,10 +463,10 @@ impl ConfigService {
     /// Delete a configuration item
     pub async fn delete_config_item(&self, config_id: String) -> Result<()> {
         let mut collection = self.load_all_configs().await?;
-        
+
         // Remove the config
         collection.configs.retain(|c| c.id != config_id);
-        
+
         // If deleted config was active, set first config as active
         if collection.active_config_id == Some(config_id) {
             collection.active_config_id = collection.configs.first().map(|c| c.id.clone());
@@ -467,7 +483,7 @@ impl ConfigService {
     /// Get the active configuration
     pub async fn get_active_config(&self) -> Result<Option<ConfigItem>> {
         let collection = self.load_all_configs().await?;
-        
+
         if let Some(active_id) = collection.active_config_id {
             Ok(collection.configs.into_iter().find(|c| c.id == active_id))
         } else {
@@ -492,15 +508,21 @@ impl ConfigService {
     fn get_config_dir() -> Result<PathBuf> {
         let config_dir = if cfg!(target_os = "windows") {
             dirs::config_dir()
-                .ok_or_else(|| AppError::Configuration("Failed to get config directory".to_string()))?
+                .ok_or_else(|| {
+                    AppError::Configuration("Failed to get config directory".to_string())
+                })?
                 .join(CONFIG_DIR_NAME)
         } else if cfg!(target_os = "macos") {
             dirs::config_dir()
-                .ok_or_else(|| AppError::Configuration("Failed to get config directory".to_string()))?
+                .ok_or_else(|| {
+                    AppError::Configuration("Failed to get config directory".to_string())
+                })?
                 .join(CONFIG_DIR_NAME)
         } else {
             dirs::config_dir()
-                .ok_or_else(|| AppError::Configuration("Failed to get config directory".to_string()))?
+                .ok_or_else(|| {
+                    AppError::Configuration("Failed to get config directory".to_string())
+                })?
                 .join(CONFIG_DIR_NAME)
         };
 
@@ -545,7 +567,7 @@ mod tests {
     fn create_invalid_config() -> OSSConfig {
         OSSConfig {
             provider: OSSProvider::Aliyun,
-            endpoint: "".to_string(), // Invalid: empty endpoint
+            endpoint: "".to_string(),      // Invalid: empty endpoint
             access_key_id: "".to_string(), // Invalid: empty access key
             access_key_secret: "test_secret_key".to_string(),
             bucket: "test-bucket".to_string(),
@@ -571,18 +593,18 @@ mod tests {
 
     // Note: The following tests require a Stronghold instance which is not available in unit tests
     // These would need to be integration tests or require mocking of the Stronghold API
-    
+
     #[tokio::test]
     async fn test_validate_config_valid() {
         let (service, _temp_dir) = create_test_service().await;
         let test_config = create_test_config();
 
         let validation = service.validate_config(&test_config).await.unwrap();
-        
+
         // Basic validation should pass (connection test may succeed or fail depending on network)
         assert!(validation.errors.is_empty());
         assert!(validation.connection_test.is_some());
-        
+
         let connection_test = validation.connection_test.unwrap();
         // Don't assert on success/failure as it depends on network connectivity
         assert!(connection_test.latency.is_some());
@@ -594,10 +616,10 @@ mod tests {
         let invalid_config = create_invalid_config();
 
         let validation = service.validate_config(&invalid_config).await.unwrap();
-        
+
         assert!(!validation.valid);
         assert!(!validation.errors.is_empty());
-        
+
         // Check that all expected errors are present
         let error_messages = validation.errors.join(" ");
         assert!(error_messages.contains("Endpoint is required"));
@@ -610,12 +632,12 @@ mod tests {
     #[tokio::test]
     async fn test_validate_config_edge_cases() {
         let (service, _temp_dir) = create_test_service().await;
-        
+
         // Test with whitespace-only fields
         let mut config = create_test_config();
         config.endpoint = "   ".to_string();
         config.access_key_id = "\t\n".to_string();
-        
+
         let validation = service.validate_config(&config).await.unwrap();
         assert!(!validation.valid);
         assert!(validation.errors.len() >= 2);
@@ -624,7 +646,7 @@ mod tests {
     #[tokio::test]
     async fn test_different_oss_providers() {
         let (service, _temp_dir) = create_test_service().await;
-        
+
         let providers = vec![
             OSSProvider::Aliyun,
             OSSProvider::Tencent,
@@ -635,7 +657,7 @@ mod tests {
         for provider in providers {
             let mut config = create_test_config();
             config.provider = provider;
-            
+
             let validation = service.validate_config(&config).await.unwrap();
             // Connection may succeed or fail depending on network, but should not panic
             assert!(validation.connection_test.is_some());
@@ -648,13 +670,13 @@ mod tests {
     #[tokio::test]
     async fn test_aws_region_handling() {
         let (service, _temp_dir) = create_test_service().await;
-        
+
         // Test us-east-1 (special case)
         let mut config = create_test_config();
         config.provider = OSSProvider::AWS;
         config.region = "us-east-1".to_string();
         config.endpoint = "https://s3.amazonaws.com".to_string();
-        
+
         let validation = service.validate_config(&config).await.unwrap();
         if let Some(connection_test) = validation.connection_test {
             assert!(connection_test.latency.is_some()); // Should have latency regardless of success
@@ -672,7 +694,7 @@ mod tests {
     async fn test_config_file_path() {
         let (service, _temp_dir) = create_test_service().await;
         let cache_path = service.get_cache_file_path();
-        
+
         assert!(cache_path.ends_with(CACHE_FILE_NAME));
         assert!(cache_path.parent().unwrap().exists());
     }

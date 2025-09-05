@@ -67,13 +67,10 @@ export type {
   
   // File operation types
   LinkReplacement,
-  BackupInfo,
   FileOperation,
   ReplacementResult,
   ReplacementError,
   BatchReplacementResult,
-  RollbackResult,
-  RollbackError,
   
   // History types
   UploadHistoryRecord,

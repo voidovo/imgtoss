@@ -24,7 +24,6 @@ export interface UserPreferences {
   showNotifications: boolean;
   defaultUploadPath: string;
   defaultBatchSize: number;
-  autoBackup: boolean;
   compressionEnabled: boolean;
   compressionQuality: number;
   duplicateCheckEnabled: boolean;
@@ -107,7 +106,6 @@ const defaultUserPreferences: UserPreferences = {
   showNotifications: true,
   defaultUploadPath: 'images/',
   defaultBatchSize: 3,
-  autoBackup: true,
   compressionEnabled: false,
   compressionQuality: 80,
   duplicateCheckEnabled: true,

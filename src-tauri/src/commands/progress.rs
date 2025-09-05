@@ -1,8 +1,8 @@
+use crate::models::UploadProgress;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use tokio::sync::broadcast;
-use crate::models::UploadProgress;
 use tauri::{AppHandle, Emitter};
+use tokio::sync::broadcast;
 
 /// Progress notification system for async operations
 #[derive(Clone)]
@@ -134,16 +134,12 @@ mod tests {
     fn test_progress_update_and_get() {
         let notifier = ProgressNotifier::new();
         let task_id = "test-task-123".to_string();
-        let progress = create_progress_update(
-            "image-123".to_string(),
-            50.0,
-            1024,
-            2048,
-            Some(512),
-        );
+        let progress = create_progress_update("image-123".to_string(), 50.0, 1024, 2048, Some(512));
 
         // Update progress
-        assert!(notifier.update_progress(task_id.clone(), progress.clone()).is_ok());
+        assert!(notifier
+            .update_progress(task_id.clone(), progress.clone())
+            .is_ok());
 
         // Get progress
         let retrieved = notifier.get_progress(&task_id).unwrap();
@@ -160,13 +156,7 @@ mod tests {
     fn test_progress_remove() {
         let notifier = ProgressNotifier::new();
         let task_id = "test-task-456".to_string();
-        let progress = create_progress_update(
-            "image-456".to_string(),
-            100.0,
-            2048,
-            2048,
-            None,
-        );
+        let progress = create_progress_update("image-456".to_string(), 100.0, 2048, 2048, None);
 
         // Add progress
         notifier.update_progress(task_id.clone(), progress).unwrap();
@@ -180,7 +170,7 @@ mod tests {
     #[test]
     fn test_get_all_progress() {
         let notifier = ProgressNotifier::new();
-        
+
         // Add multiple progress entries
         for i in 0..3 {
             let task_id = format!("task-{}", i);
@@ -201,19 +191,16 @@ mod tests {
     #[test]
     fn test_clear_all() {
         let notifier = ProgressNotifier::new();
-        
+
         // Add some progress
-        let progress = create_progress_update(
-            "image-clear".to_string(),
-            75.0,
-            1536,
-            2048,
-            Some(128),
-        );
-        notifier.update_progress("task-clear".to_string(), progress).unwrap();
-        
+        let progress =
+            create_progress_update("image-clear".to_string(), 75.0, 1536, 2048, Some(128));
+        notifier
+            .update_progress("task-clear".to_string(), progress)
+            .unwrap();
+
         assert_eq!(notifier.get_all_progress().unwrap().len(), 1);
-        
+
         // Clear all
         notifier.clear_all().unwrap();
         assert!(notifier.get_all_progress().unwrap().is_empty());
@@ -223,7 +210,7 @@ mod tests {
     fn test_subscribe() {
         let notifier = ProgressNotifier::new();
         let mut receiver = notifier.subscribe();
-        
+
         // This test just ensures the subscription works
         // In a real scenario, you'd spawn a task to listen for updates
         assert!(receiver.try_recv().is_err()); // No messages yet

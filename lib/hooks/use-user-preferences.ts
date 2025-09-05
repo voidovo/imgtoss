@@ -45,7 +45,7 @@ export function useUserPreferences(): PreferencesState & PreferencesActions {
       // Validate the imported preferences
       const validKeys = [
         'theme', 'autoSaveConfig', 'showNotifications', 'defaultUploadPath',
-        'defaultBatchSize', 'autoBackup', 'compressionEnabled', 'compressionQuality',
+        'defaultBatchSize', 'compressionEnabled', 'compressionQuality',
         'duplicateCheckEnabled', 'autoRetryFailedUploads', 'maxRetryAttempts'
       ];
       
@@ -139,16 +139,5 @@ export function useNotificationPreferences() {
   return {
     showNotifications: getPreference('showNotifications'),
     setShowNotifications: (enabled: boolean) => setPreference('showNotifications', enabled),
-  };
-}
-
-export function useBackupPreferences() {
-  const { getPreference, setPreference } = useUserPreferences();
-  
-  return {
-    autoBackup: getPreference('autoBackup'),
-    autoSaveConfig: getPreference('autoSaveConfig'),
-    setAutoBackup: (enabled: boolean) => setPreference('autoBackup', enabled),
-    setAutoSaveConfig: (enabled: boolean) => setPreference('autoSaveConfig', enabled),
   };
 }
