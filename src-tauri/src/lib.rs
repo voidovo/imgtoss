@@ -100,6 +100,9 @@ pub fn run() {
             retry_upload_task,
             get_upload_task_status,
             get_all_upload_tasks,
+            // Thumbnail Commands
+            get_thumbnail,
+            cleanup_thumbnail_cache,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

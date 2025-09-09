@@ -9,11 +9,49 @@ use std::path::Path;
 use tokio::task;
 
 /// Image processing service for thumbnail generation, compression, format conversion, and metadata extraction
-pub struct ImageService;
+#[derive(Clone)]
+pub struct ImageService {
+    cache_dir: Option<std::path::PathBuf>,
+    client: Option<reqwest::Client>,
+}
 
 impl ImageService {
     pub fn new() -> Self {
-        Self
+        Self {
+            cache_dir: None,
+            client: None,
+        }
+    }
+
+    /// Create a new ImageService with caching enabled
+    pub fn with_cache() -> Result<Self> {
+        let cache_dir = Self::get_cache_directory()?;
+
+        // 确保缓存目录存在
+        std::fs::create_dir_all(&cache_dir).map_err(|e| {
+            AppError::FileSystem(format!("Failed to create cache directory: {}", e))
+        })?;
+
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .build()?;
+
+        Ok(Self {
+            cache_dir: Some(cache_dir),
+            client: Some(client),
+        })
+    }
+
+    /// Get cache directory path
+    fn get_cache_directory() -> Result<std::path::PathBuf> {
+        let app_data_dir = dirs::data_dir()
+            .ok_or_else(|| {
+                AppError::Configuration("Could not determine data directory".to_string())
+            })?
+            .join("imgtoss")
+            .join("thumbnails");
+
+        Ok(app_data_dir)
     }
 
     /// Generate a thumbnail for the given image
@@ -39,32 +77,65 @@ impl ImageService {
                 {
                     // Load the image
                     log_debug!("Opening image file: {}", image_path_clone);
-                    let img = ImageReader::open(&image_path_clone)
-                        .map_err(|e| {
-                            log_error!(
-                                error = %e,
-                                file_path = %image_path_clone,
-                                operation = "open_image",
-                                "Failed to open image file"
-                            );
-                            AppError::ImageProcessing(format!(
-                                "Failed to open image {}: {}",
-                                image_path_clone, e
-                            ))
-                        })?
-                        .decode()
-                        .map_err(|e| {
-                            log_error!(
-                                error = %e,
-                                file_path = %image_path_clone,
-                                operation = "decode_image",
-                                "Failed to decode image file"
-                            );
-                            AppError::ImageProcessing(format!(
-                                "Failed to decode image {}: {}",
-                                image_path_clone, e
-                            ))
-                        })?;
+
+                    // Check if file exists first
+                    if !std::path::Path::new(&image_path_clone).exists() {
+                        return Err(AppError::ImageProcessing(format!(
+                            "Image file does not exist: {}",
+                            image_path_clone
+                        )));
+                    }
+
+                    // Check file size
+                    let metadata = std::fs::metadata(&image_path_clone).map_err(|e| {
+                        AppError::ImageProcessing(format!(
+                            "Failed to read file metadata {}: {}",
+                            image_path_clone, e
+                        ))
+                    })?;
+
+                    log_debug!(file_size = metadata.len(), "File metadata retrieved");
+
+                    if metadata.len() == 0 {
+                        return Err(AppError::ImageProcessing(format!(
+                            "Image file is empty: {}",
+                            image_path_clone
+                        )));
+                    }
+
+                    let reader = ImageReader::open(&image_path_clone).map_err(|e| {
+                        log_error!(
+                            error = %e,
+                            file_path = %image_path_clone,
+                            operation = "open_image",
+                            "Failed to open image file"
+                        );
+                        AppError::ImageProcessing(format!(
+                            "Failed to open image {}: {}",
+                            image_path_clone, e
+                        ))
+                    })?;
+
+                    // Try to detect format before decoding
+                    let detected_format = reader.format();
+                    log_debug!(
+                        detected_format = ?detected_format,
+                        "Image format detection result"
+                    );
+
+                    let img = reader.decode().map_err(|e| {
+                        log_error!(
+                            error = %e,
+                            file_path = %image_path_clone,
+                            detected_format = ?detected_format,
+                            operation = "decode_image",
+                            "Failed to decode image file"
+                        );
+                        AppError::ImageProcessing(format!(
+                            "Failed to decode image {}: {}",
+                            image_path_clone, e
+                        ))
+                    })?;
 
                     // Calculate thumbnail dimensions while maintaining aspect ratio
                     let (width, height) = img.dimensions();
@@ -510,6 +581,283 @@ impl ImageService {
         Ok(base_quality)
     }
 
+    /// Generate thumbnail from memory data
+    ///
+    /// # Arguments
+    /// * `image_data` - Image data as bytes
+    /// * `size` - Maximum dimension (width or height) for the thumbnail
+    ///
+    /// # Returns
+    /// * `Result<Vec<u8>>` - JPEG encoded thumbnail data
+    fn generate_thumbnail_from_memory(image_data: &[u8], size: u32) -> Result<Vec<u8>> {
+        log_debug!(
+            data_size = image_data.len(),
+            thumbnail_size = size,
+            "Starting thumbnail generation from memory"
+        );
+
+        // Validate input data
+        if image_data.is_empty() {
+            return Err(AppError::ImageProcessing("Image data is empty".to_string()));
+        }
+
+        // Load image from memory
+        let img = image::load_from_memory(image_data).map_err(|e| {
+            log_error!(
+                error = %e,
+                data_size = image_data.len(),
+                operation = "load_from_memory",
+                "Failed to load image from memory"
+            );
+            AppError::ImageProcessing(format!("Failed to load image from memory: {}", e))
+        })?;
+
+        // Calculate thumbnail dimensions while maintaining aspect ratio
+        let (width, height) = img.dimensions();
+        log_debug!(
+            original_width = width,
+            original_height = height,
+            "Original image dimensions"
+        );
+
+        let (thumb_width, thumb_height) = if width > height {
+            let ratio = height as f32 / width as f32;
+            (size, (size as f32 * ratio) as u32)
+        } else {
+            let ratio = width as f32 / height as f32;
+            ((size as f32 * ratio) as u32, size)
+        };
+
+        log_debug!(
+            thumb_width = thumb_width,
+            thumb_height = thumb_height,
+            "Calculated thumbnail dimensions"
+        );
+
+        // Resize the image using high-quality filtering
+        log_debug!("Resizing image to thumbnail dimensions");
+        let thumbnail = img.resize(thumb_width, thumb_height, FilterType::Lanczos3);
+
+        // Convert RGBA to RGB if necessary (JPEG doesn't support alpha channel)
+        log_debug!("Converting color format if needed");
+        let thumbnail_rgb = match thumbnail.color() {
+            image::ColorType::Rgba8 => {
+                log_debug!("Converting RGBA8 to RGB8");
+                // Convert RGBA to RGB by removing alpha channel
+                image::DynamicImage::ImageRgb8(image::ImageBuffer::from_fn(
+                    thumbnail.width(),
+                    thumbnail.height(),
+                    |x, y| {
+                        let rgba = thumbnail.get_pixel(x, y);
+                        image::Rgb([rgba[0], rgba[1], rgba[2]])
+                    },
+                ))
+            }
+            image::ColorType::Rgba16 => {
+                log_debug!("Converting RGBA16 to RGB8");
+                // Convert RGBA16 to RGB8
+                let rgba16_img = thumbnail.to_rgba16();
+                image::DynamicImage::ImageRgb8(image::ImageBuffer::from_fn(
+                    thumbnail.width(),
+                    thumbnail.height(),
+                    |x, y| {
+                        let rgba = rgba16_img.get_pixel(x, y);
+                        // Convert 16-bit to 8-bit
+                        image::Rgb([
+                            (rgba[0] >> 8) as u8,
+                            (rgba[1] >> 8) as u8,
+                            (rgba[2] >> 8) as u8,
+                        ])
+                    },
+                ))
+            }
+            _ => {
+                log_debug!("Using original color format");
+                thumbnail // Already RGB or other compatible format
+            }
+        };
+
+        // Encode as JPEG with good quality
+        log_debug!("Encoding thumbnail as JPEG");
+        let mut buffer = Vec::new();
+        let mut cursor = Cursor::new(&mut buffer);
+
+        thumbnail_rgb
+            .write_to(&mut cursor, ImageFormat::Jpeg)
+            .map_err(|e| {
+                log_error!(
+                    error = %e,
+                    operation = "encode_thumbnail",
+                    "Failed to encode thumbnail to JPEG"
+                );
+                AppError::ImageProcessing(format!("Failed to encode thumbnail: {}", e))
+            })?;
+
+        log_debug!(
+            thumbnail_size_bytes = buffer.len(),
+            "Thumbnail encoding completed"
+        );
+
+        Ok(buffer)
+    }
+
+    /// Generate thumbnail synchronously (for use in blocking contexts)
+    ///
+    /// # Arguments
+    /// * `image_path` - Path to the source image file
+    /// * `size` - Maximum dimension (width or height) for the thumbnail
+    ///
+    /// # Returns
+    /// * `Result<Vec<u8>>` - JPEG encoded thumbnail data
+    fn generate_thumbnail_sync(image_path: &str, size: u32) -> Result<Vec<u8>> {
+        log_debug!(
+            image_path = image_path,
+            thumbnail_size = size,
+            "Starting synchronous thumbnail generation"
+        );
+
+        // Check if file exists first
+        if !std::path::Path::new(image_path).exists() {
+            return Err(AppError::ImageProcessing(format!(
+                "Image file does not exist: {}",
+                image_path
+            )));
+        }
+
+        // Check file size
+        let metadata = std::fs::metadata(image_path).map_err(|e| {
+            AppError::ImageProcessing(format!(
+                "Failed to read file metadata {}: {}",
+                image_path, e
+            ))
+        })?;
+
+        log_debug!(file_size = metadata.len(), "File metadata retrieved");
+
+        if metadata.len() == 0 {
+            return Err(AppError::ImageProcessing(format!(
+                "Image file is empty: {}",
+                image_path
+            )));
+        }
+
+        let reader = ImageReader::open(image_path).map_err(|e| {
+            log_error!(
+                error = %e,
+                file_path = image_path,
+                operation = "open_image",
+                "Failed to open image file"
+            );
+            AppError::ImageProcessing(format!("Failed to open image {}: {}", image_path, e))
+        })?;
+
+        // Try to detect format before decoding
+        let detected_format = reader.format();
+        log_debug!(
+            detected_format = ?detected_format,
+            "Image format detection result"
+        );
+
+        let img = reader.decode().map_err(|e| {
+            log_error!(
+                error = %e,
+                file_path = image_path,
+                detected_format = ?detected_format,
+                operation = "decode_image",
+                "Failed to decode image file"
+            );
+            AppError::ImageProcessing(format!("Failed to decode image {}: {}", image_path, e))
+        })?;
+
+        // Calculate thumbnail dimensions while maintaining aspect ratio
+        let (width, height) = img.dimensions();
+        log_debug!(
+            original_width = width,
+            original_height = height,
+            "Original image dimensions"
+        );
+
+        let (thumb_width, thumb_height) = if width > height {
+            let ratio = height as f32 / width as f32;
+            (size, (size as f32 * ratio) as u32)
+        } else {
+            let ratio = width as f32 / height as f32;
+            ((size as f32 * ratio) as u32, size)
+        };
+
+        log_debug!(
+            thumb_width = thumb_width,
+            thumb_height = thumb_height,
+            "Calculated thumbnail dimensions"
+        );
+
+        // Resize the image using high-quality filtering
+        log_debug!("Resizing image to thumbnail dimensions");
+        let thumbnail = img.resize(thumb_width, thumb_height, FilterType::Lanczos3);
+
+        // Convert RGBA to RGB if necessary (JPEG doesn't support alpha channel)
+        log_debug!("Converting color format if needed");
+        let thumbnail_rgb = match thumbnail.color() {
+            image::ColorType::Rgba8 => {
+                log_debug!("Converting RGBA8 to RGB8");
+                // Convert RGBA to RGB by removing alpha channel
+                image::DynamicImage::ImageRgb8(image::ImageBuffer::from_fn(
+                    thumbnail.width(),
+                    thumbnail.height(),
+                    |x, y| {
+                        let rgba = thumbnail.get_pixel(x, y);
+                        image::Rgb([rgba[0], rgba[1], rgba[2]])
+                    },
+                ))
+            }
+            image::ColorType::Rgba16 => {
+                log_debug!("Converting RGBA16 to RGB8");
+                // Convert RGBA16 to RGB8
+                let rgba16_img = thumbnail.to_rgba16();
+                image::DynamicImage::ImageRgb8(image::ImageBuffer::from_fn(
+                    thumbnail.width(),
+                    thumbnail.height(),
+                    |x, y| {
+                        let rgba = rgba16_img.get_pixel(x, y);
+                        // Convert 16-bit to 8-bit
+                        image::Rgb([
+                            (rgba[0] >> 8) as u8,
+                            (rgba[1] >> 8) as u8,
+                            (rgba[2] >> 8) as u8,
+                        ])
+                    },
+                ))
+            }
+            _ => {
+                log_debug!("Using original color format");
+                thumbnail // Already RGB or other compatible format
+            }
+        };
+
+        // Encode as JPEG with good quality
+        log_debug!("Encoding thumbnail as JPEG");
+        let mut buffer = Vec::new();
+        let mut cursor = Cursor::new(&mut buffer);
+
+        thumbnail_rgb
+            .write_to(&mut cursor, ImageFormat::Jpeg)
+            .map_err(|e| {
+                log_error!(
+                    error = %e,
+                    operation = "encode_thumbnail",
+                    "Failed to encode thumbnail to JPEG"
+                );
+                AppError::ImageProcessing(format!("Failed to encode thumbnail: {}", e))
+            })?;
+
+        log_debug!(
+            thumbnail_size_bytes = buffer.len(),
+            "Thumbnail encoding completed"
+        );
+
+        Ok(buffer)
+    }
+
     /// Calculate SHA256 checksum for an image file
     ///
     /// # Arguments
@@ -561,6 +909,505 @@ impl ImageService {
         .await
         .map_err(|e| AppError::ImageProcessing(format!("Task join error: {}", e)))?
     }
+
+    // ============================================================================
+    // Thumbnail Caching Methods
+    // ============================================================================
+
+    /// Get thumbnail with caching support (200x200px)
+    pub async fn get_cached_thumbnail(&self, record_id: &str, image_url: &str) -> Result<Vec<u8>> {
+        // Check if caching is enabled
+        let (cache_dir, _client) = match (&self.cache_dir, &self.client) {
+            (Some(dir), Some(client)) => (dir, client),
+            _ => {
+                return Err(AppError::Configuration(
+                    "Caching not enabled. Use ImageService::with_cache()".to_string(),
+                ))
+            }
+        };
+
+        log_info!(
+            operation = "get_cached_thumbnail",
+            record_id = record_id,
+            image_url = image_url,
+            "Getting cached thumbnail"
+        );
+
+        let cache_path = cache_dir.join(format!("{}_200.jpg", record_id));
+
+        // Check if cache exists
+        if cache_path.exists() {
+            log_debug!(
+                cache_path = %cache_path.display(),
+                "Loading thumbnail from cache"
+            );
+
+            match std::fs::read(&cache_path) {
+                Ok(data) => {
+                    log_info!(
+                        operation = "get_cached_thumbnail",
+                        record_id = record_id,
+                        cache_hit = true,
+                        "Thumbnail loaded from cache"
+                    );
+                    return Ok(data);
+                }
+                Err(e) => {
+                    log_debug!(
+                        error = %e,
+                        cache_path = %cache_path.display(),
+                        "Failed to read cached thumbnail, will regenerate"
+                    );
+                }
+            }
+        }
+
+        // Cache miss, generate new thumbnail
+        log_debug!("Cache miss, generating new thumbnail");
+        self.generate_and_cache_thumbnail(record_id, image_url)
+            .await
+    }
+
+    /// Generate and cache thumbnail from URL
+    pub async fn generate_and_cache_thumbnail(
+        &self,
+        record_id: &str,
+        image_url: &str,
+    ) -> Result<Vec<u8>> {
+        // Check if caching is enabled
+        let (cache_dir, client) = match (&self.cache_dir, &self.client) {
+            (Some(dir), Some(client)) => (dir, client),
+            _ => {
+                return Err(AppError::Configuration(
+                    "Caching not enabled. Use ImageService::with_cache()".to_string(),
+                ))
+            }
+        };
+
+        log_info!(
+            operation = "generate_and_cache_thumbnail",
+            record_id = record_id,
+            image_url = image_url,
+            "Generating thumbnail from URL"
+        );
+
+        let record_id_clone = record_id.to_string();
+        let image_url = image_url.to_string();
+        let cache_path = cache_dir.join(format!("{}_200.jpg", record_id));
+        let client = client.clone();
+
+        let thumbnail_data = task::spawn_blocking(move || -> Result<Vec<u8>> {
+            // Download image
+            log_debug!("Downloading image from URL: {}", image_url);
+
+            let rt = tokio::runtime::Handle::current();
+            let image_data = rt
+                .block_on(async {
+                    let response = client
+                        .get(&image_url)
+                        .send()
+                        .await
+                        .map_err(|e| format!("Failed to send request: {}", e))?;
+
+                    // Check response status
+                    if !response.status().is_success() {
+                        return Err(format!("HTTP error: {}", response.status()));
+                    }
+
+                    let bytes = response
+                        .bytes()
+                        .await
+                        .map_err(|e| format!("Failed to read response bytes: {}", e))?;
+                    Ok::<Vec<u8>, String>(bytes.to_vec())
+                })
+                .map_err(|e| {
+                    AppError::ImageProcessing(format!("Failed to download image: {}", e))
+                })?;
+
+            log_debug!(
+                image_size = image_data.len(),
+                "Image downloaded successfully"
+            );
+
+            // Validate that we have actual image data
+            if image_data.is_empty() {
+                return Err(AppError::ImageProcessing(
+                    "Downloaded image data is empty".to_string(),
+                ));
+            }
+
+            // Try to generate thumbnail directly from memory first
+            match Self::generate_thumbnail_from_memory(&image_data, 200) {
+                Ok(thumbnail) => {
+                    log_debug!(
+                        thumbnail_size = thumbnail.len(),
+                        "Thumbnail generated from memory successfully"
+                    );
+
+                    // Cache thumbnail
+                    if let Err(e) = std::fs::write(&cache_path, &thumbnail) {
+                        log_debug!(
+                            error = %e,
+                            cache_path = %cache_path.display(),
+                            "Failed to cache thumbnail, but continuing"
+                        );
+                    } else {
+                        log_debug!(
+                            cache_path = %cache_path.display(),
+                            "Thumbnail cached successfully"
+                        );
+                    }
+
+                    return Ok(thumbnail);
+                }
+                Err(e) => {
+                    log_debug!(
+                        error = %e,
+                        "Failed to generate thumbnail from memory, trying file approach"
+                    );
+                }
+            }
+
+            // Fallback: use file-based approach
+            // Detect image format from data
+            let format = image::guess_format(&image_data).map_err(|e| {
+                AppError::ImageProcessing(format!("Failed to detect image format: {}", e))
+            })?;
+
+            // Get appropriate file extension
+            let extension = match format {
+                image::ImageFormat::Jpeg => "jpg",
+                image::ImageFormat::Png => "png",
+                image::ImageFormat::WebP => "webp",
+                image::ImageFormat::Bmp => "bmp",
+                image::ImageFormat::Tiff => "tiff",
+                image::ImageFormat::Gif => "gif",
+                _ => "jpg", // Default fallback
+            };
+
+            // Write to temporary file with correct extension
+            let temp_dir = std::env::temp_dir();
+            let temp_path = temp_dir.join(format!("temp_image_{}.{}", record_id_clone, extension));
+
+            std::fs::write(&temp_path, &image_data)
+                .map_err(|e| AppError::FileSystem(format!("Failed to write temp file: {}", e)))?;
+
+            // Generate thumbnail from file
+            let thumbnail = Self::generate_thumbnail_sync(temp_path.to_str().unwrap(), 200)?;
+
+            // Clean up temp file
+            let _ = std::fs::remove_file(&temp_path);
+
+            log_debug!(
+                thumbnail_size = thumbnail.len(),
+                "Thumbnail generated from file successfully"
+            );
+
+            // Cache thumbnail
+            if let Err(e) = std::fs::write(&cache_path, &thumbnail) {
+                log_debug!(
+                    error = %e,
+                    cache_path = %cache_path.display(),
+                    "Failed to cache thumbnail, but continuing"
+                );
+            } else {
+                log_debug!(
+                    cache_path = %cache_path.display(),
+                    "Thumbnail cached successfully"
+                );
+            }
+
+            Ok(thumbnail)
+        })
+        .await
+        .map_err(|e| AppError::ImageProcessing(format!("Task join error: {}", e)))??;
+
+        log_info!(
+            operation = "generate_and_cache_thumbnail",
+            record_id = record_id,
+            thumbnail_size = thumbnail_data.len(),
+            success = true,
+            "Thumbnail generation completed"
+        );
+
+        Ok(thumbnail_data)
+    }
+
+    /// Clean up old cache files (30+ days)
+    pub async fn cleanup_old_cache(&self) -> Result<usize> {
+        let cache_dir = match &self.cache_dir {
+            Some(dir) => dir.clone(),
+            None => return Err(AppError::Configuration("Caching not enabled".to_string())),
+        };
+
+        log_info!(
+            operation = "cleanup_old_cache",
+            cache_dir = %cache_dir.display(),
+            "Starting cache cleanup"
+        );
+
+        let deleted_count = task::spawn_blocking(move || -> Result<usize> {
+            let mut deleted = 0;
+            let cutoff_time =
+                std::time::SystemTime::now() - std::time::Duration::from_secs(30 * 24 * 60 * 60); // 30天
+
+            if !cache_dir.exists() {
+                return Ok(0);
+            }
+
+            let entries = std::fs::read_dir(&cache_dir).map_err(|e| {
+                AppError::FileSystem(format!("Failed to read cache directory: {}", e))
+            })?;
+
+            for entry in entries {
+                let entry = entry.map_err(|e| {
+                    AppError::FileSystem(format!("Failed to read directory entry: {}", e))
+                })?;
+
+                let path = entry.path();
+
+                // Only process thumbnail files
+                if !path.is_file() || path.extension().is_none_or(|ext| ext != "jpg") {
+                    continue;
+                }
+
+                // Check file modification time
+                match std::fs::metadata(&path) {
+                    Ok(metadata) => {
+                        if let Ok(modified) = metadata.modified() {
+                            if modified < cutoff_time {
+                                if let Err(e) = std::fs::remove_file(&path) {
+                                    log_debug!(
+                                        error = %e,
+                                        file_path = %path.display(),
+                                        "Failed to delete old cache file"
+                                    );
+                                } else {
+                                    log_debug!(
+                                        file_path = %path.display(),
+                                        "Deleted old cache file"
+                                    );
+                                    deleted += 1;
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        log_debug!(
+                            error = %e,
+                            file_path = %path.display(),
+                            "Failed to get file metadata"
+                        );
+                    }
+                }
+            }
+
+            Ok(deleted)
+        })
+        .await
+        .map_err(|e| AppError::ImageProcessing(format!("Task join error: {}", e)))??;
+
+        log_info!(
+            operation = "cleanup_old_cache",
+            deleted_count = deleted_count,
+            "Cache cleanup completed"
+        );
+
+        Ok(deleted_count)
+    }
+
+    /// Clean up cache by size limit
+    #[allow(dead_code)]
+    pub async fn cleanup_cache_by_size(&self, max_size_mb: u64) -> Result<usize> {
+        let cache_dir = match &self.cache_dir {
+            Some(dir) => dir.clone(),
+            None => return Err(AppError::Configuration("Caching not enabled".to_string())),
+        };
+
+        log_info!(
+            operation = "cleanup_cache_by_size",
+            max_size_mb = max_size_mb,
+            "Starting size-based cache cleanup"
+        );
+
+        let max_size_bytes = max_size_mb * 1024 * 1024;
+
+        let deleted_count = task::spawn_blocking(move || -> Result<usize> {
+            if !cache_dir.exists() {
+                return Ok(0);
+            }
+
+            // Collect all cache files
+            let mut files = Vec::new();
+            let entries = std::fs::read_dir(&cache_dir).map_err(|e| {
+                AppError::FileSystem(format!("Failed to read cache directory: {}", e))
+            })?;
+
+            for entry in entries {
+                let entry = entry.map_err(|e| {
+                    AppError::FileSystem(format!("Failed to read directory entry: {}", e))
+                })?;
+
+                let path = entry.path();
+
+                if !path.is_file() || path.extension().is_none_or(|ext| ext != "jpg") {
+                    continue;
+                }
+
+                if let Ok(metadata) = std::fs::metadata(&path) {
+                    if let Ok(modified) = metadata.modified() {
+                        files.push((path, metadata.len(), modified));
+                    }
+                }
+            }
+
+            // Sort by modification time (oldest first)
+            files.sort_by_key(|(_, _, modified)| *modified);
+
+            // Calculate total size
+            let total_size: u64 = files.iter().map(|(_, size, _)| *size).sum();
+
+            if total_size <= max_size_bytes {
+                log_debug!(
+                    total_size_mb = total_size / 1024 / 1024,
+                    max_size_mb = max_size_mb,
+                    "Cache size within limit, no cleanup needed"
+                );
+                return Ok(0);
+            }
+
+            // Delete oldest files until size is within limit
+            let mut current_size = total_size;
+            let mut deleted = 0;
+
+            for (path, size, _) in files {
+                if current_size <= max_size_bytes {
+                    break;
+                }
+
+                if let Err(e) = std::fs::remove_file(&path) {
+                    log_debug!(
+                        error = %e,
+                        file_path = %path.display(),
+                        "Failed to delete cache file"
+                    );
+                } else {
+                    log_debug!(
+                        file_path = %path.display(),
+                        file_size = size,
+                        "Deleted cache file for size limit"
+                    );
+                    current_size -= size;
+                    deleted += 1;
+                }
+            }
+
+            Ok(deleted)
+        })
+        .await
+        .map_err(|e| AppError::ImageProcessing(format!("Task join error: {}", e)))??;
+
+        log_info!(
+            operation = "cleanup_cache_by_size",
+            deleted_count = deleted_count,
+            "Size-based cache cleanup completed"
+        );
+
+        Ok(deleted_count)
+    }
+
+    /// Check if thumbnail cache exists
+    #[allow(dead_code)]
+    pub fn cache_exists(&self, record_id: &str) -> bool {
+        match &self.cache_dir {
+            Some(cache_dir) => {
+                let cache_path = cache_dir.join(format!("{}_200.jpg", record_id));
+                cache_path.exists()
+            }
+            None => false,
+        }
+    }
+
+    /// Get cache statistics
+    #[allow(dead_code)]
+    pub async fn get_cache_stats(&self) -> Result<CacheStats> {
+        let cache_dir = match &self.cache_dir {
+            Some(dir) => dir.clone(),
+            None => return Err(AppError::Configuration("Caching not enabled".to_string())),
+        };
+
+        let stats = task::spawn_blocking(move || -> Result<CacheStats> {
+            if !cache_dir.exists() {
+                return Ok(CacheStats {
+                    total_files: 0,
+                    total_size_bytes: 0,
+                    oldest_file: None,
+                    newest_file: None,
+                });
+            }
+
+            let mut total_files = 0;
+            let mut total_size = 0;
+            let mut oldest: Option<std::time::SystemTime> = None;
+            let mut newest: Option<std::time::SystemTime> = None;
+
+            let entries = std::fs::read_dir(&cache_dir).map_err(|e| {
+                AppError::FileSystem(format!("Failed to read cache directory: {}", e))
+            })?;
+
+            for entry in entries {
+                let entry = entry.map_err(|e| {
+                    AppError::FileSystem(format!("Failed to read directory entry: {}", e))
+                })?;
+
+                let path = entry.path();
+
+                if !path.is_file() || path.extension().is_none_or(|ext| ext != "jpg") {
+                    continue;
+                }
+
+                if let Ok(metadata) = std::fs::metadata(&path) {
+                    total_files += 1;
+                    total_size += metadata.len();
+
+                    if let Ok(modified) = metadata.modified() {
+                        match oldest {
+                            None => oldest = Some(modified),
+                            Some(old) if modified < old => oldest = Some(modified),
+                            _ => {}
+                        }
+
+                        match newest {
+                            None => newest = Some(modified),
+                            Some(new) if modified > new => newest = Some(modified),
+                            _ => {}
+                        }
+                    }
+                }
+            }
+
+            Ok(CacheStats {
+                total_files,
+                total_size_bytes: total_size,
+                oldest_file: oldest,
+                newest_file: newest,
+            })
+        })
+        .await
+        .map_err(|e| AppError::ImageProcessing(format!("Task join error: {}", e)))??;
+
+        Ok(stats)
+    }
+}
+
+/// Cache statistics
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct CacheStats {
+    pub total_files: usize,
+    pub total_size_bytes: u64,
+    pub oldest_file: Option<std::time::SystemTime>,
+    pub newest_file: Option<std::time::SystemTime>,
 }
 
 #[cfg(test)]
@@ -682,7 +1529,9 @@ mod tests {
         assert!(result.is_err());
 
         if let Err(AppError::ImageProcessing(msg)) = result {
-            assert!(msg.contains("Failed to open image"));
+            assert!(
+                msg.contains("Image file does not exist") || msg.contains("Failed to open image")
+            );
         } else {
             panic!("Expected ImageProcessing error");
         }

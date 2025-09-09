@@ -10,6 +10,7 @@ use crate::services::history_service::{HistoryQuery, HistoryStatistics};
 use crate::services::{ConfigService, FileService, HistoryService, ImageService, OSSService};
 use crate::utils::error::AppError;
 use crate::{log_debug, log_error, log_info};
+use base64::{engine::general_purpose, Engine};
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -2825,4 +2826,114 @@ fn get_available_disk_space() -> Result<u64, String> {
     // In a real implementation, this would use system APIs
     // For now, return a placeholder value
     Ok(10_000_000_000) // 10GB
+}
+
+// ============================================================================
+// Thumbnail Commands
+// ============================================================================
+
+#[tauri::command]
+pub async fn get_thumbnail(record_id: String, image_url: String) -> Result<String, String> {
+    log_info!(
+        operation = "get_thumbnail_command",
+        record_id = %record_id,
+        image_url = %image_url,
+        "Getting thumbnail"
+    );
+
+    // 验证输入参数
+    if record_id.is_empty() {
+        return Err("Record ID cannot be empty".to_string());
+    }
+
+    if image_url.is_empty() {
+        return Err("Image URL cannot be empty".to_string());
+    }
+
+    // 验证record_id格式（应该是UUID）
+    validate_uuid(&record_id).map_err(|e| e.to_string())?;
+
+    // 验证URL格式
+    if !image_url.starts_with("http://") && !image_url.starts_with("https://") {
+        return Err("Invalid image URL format".to_string());
+    }
+
+    // 创建带缓存的图片服务
+    let image_service = ImageService::with_cache().map_err(|e| {
+        log_error!(
+            operation = "get_thumbnail_command",
+            error = %e,
+            "Failed to create image service with cache"
+        );
+        e.to_string()
+    })?;
+
+    // 获取缓存的缩略图
+    match image_service
+        .get_cached_thumbnail(&record_id, &image_url)
+        .await
+    {
+        Ok(thumbnail_data) => {
+            // 转换为base64编码
+            let base64_data = general_purpose::STANDARD.encode(&thumbnail_data);
+
+            log_info!(
+                operation = "get_thumbnail_command",
+                record_id = %record_id,
+                thumbnail_size = thumbnail_data.len(),
+                success = true,
+                "Thumbnail retrieved successfully"
+            );
+
+            Ok(base64_data)
+        }
+        Err(e) => {
+            log_error!(
+                operation = "get_thumbnail_command",
+                record_id = %record_id,
+                error = %e,
+                "Failed to get thumbnail"
+            );
+            Err(e.to_string())
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn cleanup_thumbnail_cache() -> Result<usize, String> {
+    log_info!(
+        operation = "cleanup_thumbnail_cache_command",
+        "Starting thumbnail cache cleanup"
+    );
+
+    // 创建带缓存的图片服务
+    let image_service = ImageService::with_cache().map_err(|e| {
+        log_error!(
+            operation = "cleanup_thumbnail_cache_command",
+            error = %e,
+            "Failed to create image service with cache"
+        );
+        e.to_string()
+    })?;
+
+    // 执行缓存清理
+    match image_service.cleanup_old_cache().await {
+        Ok(deleted_count) => {
+            log_info!(
+                operation = "cleanup_thumbnail_cache_command",
+                deleted_count = deleted_count,
+                success = true,
+                "Cache cleanup completed successfully"
+            );
+            Ok(deleted_count)
+        }
+        Err(e) => {
+            log_error!(
+                operation = "cleanup_thumbnail_cache_command",
+                error = %e,
+                "Cache cleanup failed"
+            );
+            Err(e.to_string())
+        }
+    }
 }

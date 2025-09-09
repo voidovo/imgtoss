@@ -18,6 +18,14 @@ imgtoss 是一个图像上传管理工具，结合了 Next.js 前端和 Tauri �
 ### Backend (Tauri)
 - **Framework**: Tauri v2 with Rust backend
 - **App ID**: `com.kieran.imgtoss`
+- **Key Dependencies**: 
+  - `reqwest` - HTTP client for OSS operations
+  - `image` - Image processing and thumbnail generation
+  - `tokio` - Async runtime
+  - `serde` - Serialization/deserialization
+  - `uuid`, `chrono` - Data utilities
+  - `sha2`, `hmac` - Cryptographic operations for OSS authentication
+  - `tracing` - Structured logging
 - **Main Services**: Located in `src-tauri/src/services/`
   - `config_service.rs` - Configuration management
   - `file_service.rs` - File operations
@@ -66,6 +74,9 @@ pnpm tauri build
 - **Frontend Dist**: `../out` (Next.js static export output)
 - **Dev URL**: `http://localhost:3000`
 - **Window Size**: 1200x800px default
+- **App Identifier**: `com.kieran.imgtoss`
+- **Auto-updater**: Configured with GitHub releases endpoint
+- **Security**: CSP enabled with asset protocol support
 
 ## Component Architecture
 
@@ -232,3 +243,20 @@ src-tauri/src/
   - 56+ test cases covering validation, security, and functionality
   - Run tests: `cargo test` (from `src-tauri/` directory)
   - Tests cover command validation, file operations, and error handling
+
+### Quality Assurance and CI/CD
+- **Pre-commit Checks**: Use `./pre-commit-check.sh` for local validation
+  - `./pre-commit-check.sh --rust-only` - Rust-only checks
+  - `./pre-commit-check.sh --quick` - Quick mode, skips time-consuming checks
+  - Currently enabled: Rust formatting (`cargo fmt --check`), Clippy analysis
+- **GitHub Actions**: Automated workflows in `.github/workflows/`
+  - `build.yml` - Multi-platform builds (Linux, macOS ARM, Windows)
+  - `test.yml` - Continuous integration testing
+  - Automated releases with security scanning and performance testing
+
+### Debugging and Troubleshooting
+- **Tauri Development**: Use `pnpm tauri dev` for hot-reload development
+- **Rust Logs**: Backend uses `tracing` for structured logging
+- **Frontend DevTools**: Standard React DevTools work in development
+- **Build Issues**: Check `src-tauri/target/` for Rust compilation errors
+- **Asset Loading**: Verify `next.config.mjs` asset prefix configuration for production builds

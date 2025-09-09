@@ -61,6 +61,24 @@ export class TauriAPI {
   }
 
   // ============================================================================
+  // Thumbnail Operations
+  // ============================================================================
+
+  /**
+   * Get thumbnail for a history record (returns base64 encoded image data)
+   */
+  async getThumbnail(recordId: string, imageUrl: string): Promise<string> {
+    return invoke<string>('get_thumbnail', { recordId, imageUrl });
+  }
+
+  /**
+   * Clean up old thumbnail cache files
+   */
+  async cleanupThumbnailCache(): Promise<number> {
+    return invoke<number>('cleanup_thumbnail_cache');
+  }
+
+  // ============================================================================
   // Upload Operations
   // ============================================================================
 
@@ -555,6 +573,11 @@ export const fileOperations = {
   scanMarkdownFiles: (filePaths: string[]) => tauriAPI.scanMarkdownFiles(filePaths),
   getImageInfo: (imagePath: string) => tauriAPI.getImageInfo(imagePath),
   generateThumbnail: (imagePath: string, size: number) => tauriAPI.generateThumbnail(imagePath, size),
+};
+
+export const thumbnailOperations = {
+  getThumbnail: (recordId: string, imageUrl: string) => tauriAPI.getThumbnail(recordId, imageUrl),
+  cleanupThumbnailCache: () => tauriAPI.cleanupThumbnailCache(),
 };
 
 export const uploadOperations = {
