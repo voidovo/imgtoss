@@ -81,6 +81,15 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
 
+      - name: 安装 Windows 运行时依赖
+        if: matrix.platform == 'windows-latest'
+        run: |
+          # 安装 Visual C++ 运行时库
+          choco install vcredist2019 -y
+          # 确保 Windows SDK 组件可用
+          choco install windows-sdk-10-version-2004-all -y
+          echo "Windows 运行时依赖安装完成"
+
       - name: 格式检查
         run: cargo fmt --all --manifest-path src-tauri/Cargo.toml -- --check
 
