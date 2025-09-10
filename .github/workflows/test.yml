@@ -104,7 +104,7 @@ jobs:
           echo "🔄 后端测试已暂时屏蔽，等待测试系统完善"
 
       - name: 运行后端测试
-        run: cargo test --manifest-path src-tauri/Cargo.toml
+        run: cargo test --manifest-path src-tauri/Cargo.toml --lib
 
   integration-test:
     name: 集成测试
